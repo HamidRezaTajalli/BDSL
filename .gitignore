@@ -1,0 +1,14 @@
+/split_learning_checkpoints/*
+
+# everything in /data
+/data/*
+
+# /models/__pycache__/*
+/models/__pycache__/*
+
+
+# pyc files
+*.pyc
+
+# pycache files
+*/__pycache__/*
