@@ -12,3 +12,11 @@
 
 # pycache files
 */__pycache__/*
+
+
+# script logging files
+
+/script_logging/*
+
+# job execution files
+/job_executer_files/*
