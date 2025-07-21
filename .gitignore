@@ -15,7 +15,6 @@
 
 
 # script logging files
-
 /script_logging/*
 
 # job execution files

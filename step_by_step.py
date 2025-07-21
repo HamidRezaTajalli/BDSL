@@ -18,7 +18,7 @@ import numpy as np
 
 from architectures import Server, Client, GatedFusion, print_model_structures
 
-from attacks.badnet import create_poisoned_set
+from attacks.attacks import create_poisoned_set
 
 
 def parse_args():
@@ -45,6 +45,12 @@ def parse_args():
                       help='Experiment number (default: 0)')
     parser.add_argument('--dataset', type=str, default='CIFAR10', choices=['CIFAR10', 'CIFAR100'],
                       help='Dataset to use (default: CIFAR10)')
+    parser.add_argument('--attack', type=str, default='badnet', choices=['badnet', 'wanet'],
+                      help='Attack type to use (default: badnet)')
+    parser.add_argument('--trigger_size', type=float, default=0.08,
+                      help='Trigger size for badnet attack (default: 0.08)')
+    parser.add_argument('--attack_mode', type=str, default='all-to-one', choices=['all-to-all', 'all-to-one'],
+                      help='Attack mode for wanet attack (default: all-to-one)')
     return parser.parse_args()
 
 
@@ -227,7 +233,7 @@ if __name__ == "__main__":
         
 
         if i in malicious_clients:
-            poisoned_subset, poisoned_indices = create_poisoned_set(trigger_size=0.08, poisoning_rate=args.poisoning_rate, target_label=args.target_label, subset=subset)
+            poisoned_subset, poisoned_indices = create_poisoned_set(args, subset)
             subset = poisoned_subset
         
         clients.append(Client(
@@ -259,14 +265,8 @@ if __name__ == "__main__":
     test_subset = torch.utils.data.Subset(test_dataset, test_indices)
     
     # Create a poisoned dataset with full poisoning rate
-    full_poisoning_rate = 1.0
-    target_label = args.target_label  
-    poisoned_test_subset, _ = create_poisoned_set(
-        trigger_size=0.08, 
-        poisoning_rate=full_poisoning_rate, 
-        target_label=target_label, 
-        subset=test_subset
-    )
+    args.poisoning_rate = 1.0
+    poisoned_test_subset, _ = create_poisoned_set(args, test_subset)
     
     # Evaluate the model on the poisoned test set to test ASR
     asr_accuracy = evaluate_model(clients, server, poisoned_test_subset, device)
@@ -280,7 +280,7 @@ if __name__ == "__main__":
     csv_file_address = results_path / f"{args.dataset}.csv"
     if not csv_file_address.exists():
         csv_file_address.touch()
-        csv_header = ['EXP_ID', 'MODEL', 'DATASET', 'CUT_LAYER', 'NUM_CLIENTS', 'NUM_ROUNDS', 'EPOCHS_PER_CLIENT', 'POISONING_RATE', 'TARGET_LABEL', 'CDA', 'ASR']
+        csv_header = ['EXP_ID', 'MODEL', 'DATASET', 'CUT_LAYER', 'NUM_CLIENTS', 'NUM_ROUNDS', 'EPOCHS_PER_CLIENT', 'POISONING_RATE', 'TARGET_LABEL', 'ATTACK', 'TRIGGER_SIZE', 'ATTACK_MODE', 'CDA', 'ASR']
         with open(csv_file_address, 'w') as f:
             writer = csv.writer(f)
             writer.writerow(csv_header)
@@ -288,7 +288,7 @@ if __name__ == "__main__":
 
     with open(csv_file_address, 'a') as f:
         writer = csv.writer(f)
-        writer.writerow([args.exp_num, args.model, args.dataset, args.cut_layer, args.num_clients, args.num_rounds, args.epochs_per_client, args.poisoning_rate, args.target_label, test_accuracy, asr_accuracy])
+        writer.writerow([args.exp_num, args.model, args.dataset, args.cut_layer, args.num_clients, args.num_rounds, args.epochs_per_client, args.poisoning_rate, args.target_label, args.attack, args.trigger_size, args.attack_mode, test_accuracy, asr_accuracy])
 
     
 

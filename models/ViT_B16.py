@@ -10,7 +10,7 @@ class ViTB16Head(nn.Module):
         super(ViTB16Head, self).__init__()
         
         # Load pretrained ViT-B/16 model from timm
-        vit_full = timm.create_model('vit_base_patch16_224', pretrained=False, num_classes=0)
+        vit_full = timm.create_model('vit_base_patch16_224', pretrained=True, num_classes=0)
         
         # ViT-B/16 has 12 transformer blocks
         # cut_layer determines how many blocks go to the head
@@ -69,7 +69,7 @@ class ViTB16Backbone(nn.Module):
         super(ViTB16Backbone, self).__init__()
         
         # Load pretrained ViT-B/16 model from timm
-        vit_full = timm.create_model('vit_base_patch16_224', pretrained=False, num_classes=0)
+        vit_full = timm.create_model('vit_base_patch16_224', pretrained=True, num_classes=0)
         
         self.cut_layer = cut_layer
         self.num_head_blocks = cut_layer + 1

@@ -96,7 +96,7 @@ class PoisonedDataset(Dataset):
     def __len__(self):
         return len(self.dataset)
 
-def create_poisoned_set(trigger_size, poisoning_rate, target_label, subset):
+def create_badnet_poisoned_set(trigger_size, poisoning_rate, target_label, subset):
     """
     Create a backdoor poisoned dataset by adding a red square trigger and changing labels.
     This version creates a new dataset wrapper rather than modifying the original.
