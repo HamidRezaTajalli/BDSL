@@ -16,7 +16,7 @@ import argparse
 import math
 import numpy as np
 
-from architectures import Server, Client, GatedFusion, print_model_structures
+from architectures import Server, Client, print_model_structures
 
 from attacks.attacks import create_poisoned_set, get_wanet_grids
 
@@ -53,9 +53,9 @@ def parse_args():
                       help='Trigger size for badnet attack (default: 0.08)')
     parser.add_argument('--attack_mode', type=str, default='all-to-one', choices=['all-to-all', 'all-to-one'],
                       help='Attack mode for wanet attack (default: all-to-one)')
-    
 
-    # WaNet-specific parameters
+
+        # WaNet-specific parameters
     parser.add_argument('--s', type=float, default=0.5,
                       help='WaNet parameter s for warping strength (default: 0.5)')
     parser.add_argument('--k', type=int, default=4,
@@ -64,8 +64,8 @@ def parse_args():
                       help='WaNet parameter for grid rescaling (default: 1.0)')
     parser.add_argument('--cross_ratio', type=float, default=2.0,
                       help='WaNet parameter for cross ratio (default: 2.0)')
-    
-    
+
+                      
     return parser.parse_args()
 
 
@@ -74,10 +74,9 @@ def parse_args():
 
 # Multi-client round-robin split learning system
 class RoundRobinSplitLearningSystem:
-    def __init__(self, server, clients, gated_fusion, checkpoint_dir="./checkpoints"):
+    def __init__(self, server, clients, checkpoint_dir="./checkpoints"):
         self.server = server
         self.clients = clients
-        self.gated_fusion = gated_fusion
         self.checkpoint_dir = checkpoint_dir
         os.makedirs(checkpoint_dir, exist_ok=True)
     
@@ -87,7 +86,6 @@ class RoundRobinSplitLearningSystem:
         
         # First client initializes or loads from previous round
         self.server.load_model()  # Load server model if available
-        self.gated_fusion.load_model()  # Load gated fusion model if available
 
         for i, client in enumerate(self.clients):
             print(f"\n--- Training Client {client.client_id} ---")
@@ -104,16 +102,13 @@ class RoundRobinSplitLearningSystem:
                 client.load_models(prev_client_id)
             
             # Train client
-            loss, accuracy = client.train_step(self.server, self.gated_fusion, epochs=epochs_per_client)
+            loss, accuracy = client.train_step_attack_only(self.server, epochs=epochs_per_client)
             
             # Save client models for next client
             client.save_models()
             
             # Save server model after each client (optional, could also save only at the end of the round)
             self.server.save_model()
-            
-            # Save gated fusion model after each client
-            self.gated_fusion.save_model()
             
             end_time = time.time()
             print(f"Client {client.client_id} completed training in {end_time - start_time:.2f}s")
@@ -181,6 +176,7 @@ if __name__ == "__main__":
     print(args)
     print("="*50)
     
+
     
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -217,10 +213,6 @@ if __name__ == "__main__":
     )
 
     # print_model_structures(args.model, args.cut_layer)
-
-
-    # Create gated fusion
-    gated_fusion = GatedFusion(model_name=args.model, cut_layer=args.cut_layer, checkpoint_dir=args.checkpoint_dir).to(device)
     
     # Create multiple clients with different data partitions
     clients = []
@@ -260,7 +252,7 @@ if __name__ == "__main__":
         ))
     
     # Create round-robin split learning system
-    system = RoundRobinSplitLearningSystem(server, clients, gated_fusion, checkpoint_dir=args.checkpoint_dir)
+    system = RoundRobinSplitLearningSystem(server, clients, checkpoint_dir=args.checkpoint_dir)
     
     # Train for multiple rounds
     system.train_multiple_rounds(num_rounds=args.num_rounds, epochs_per_client=args.epochs_per_client)
@@ -283,7 +275,7 @@ if __name__ == "__main__":
     print(f"\nAttack Success Rate (ASR) on poisoned test set: {asr_accuracy:.2f}%")
 
     # saving the results in a csv file
-    results_path = Path("./results")
+    results_path = Path("./results/attack_only")
     if not results_path.exists():
         results_path.mkdir(parents=True, exist_ok=True)
     
