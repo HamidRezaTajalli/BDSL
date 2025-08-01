@@ -3,11 +3,11 @@
 #SBATCH --ntasks=1
 #SBATCH --ntasks-per-node=1 
 #SBATCH --gpus=1
-#SBATCH --cpus-per-task=2
+#SBATCH --cpus-per-task=1
 #SBATCH --partition=gpu_a100
 ##SBATCH --partition=gpu_h100
-#SBATCH --time=0-01:00:00
-#SBATCH --mem=8GB
+#SBATCH --time=0-02:00:00
+#SBATCH --mem=4GB
 #SBATCH --output=script_logging/slurm_%A.out
 #SBATCH --mail-type=END,FAIL                     # send email when job ends or fails
 #SBATCH --mail-user=hamidreza.tajalli@ru.nl      # email address
