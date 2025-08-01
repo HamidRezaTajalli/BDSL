@@ -310,6 +310,80 @@ class Client:
         
         return final_avg_loss, final_accuracy
     
+
+    def train_step_attack_only(self, server, epochs=1):
+        """Complete just attack training step with the server"""
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        
+        self.head.train()  # Set head to training mode
+        
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            epoch_correct = 0
+            epoch_total = 0
+            
+            for inputs, labels in self.dataloader:
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                
+                # Client: Head forward pass
+                head_output = self.head(inputs)
+
+                backbone_input = head_output.detach().clone().requires_grad_(True)
+                
+                # Server: Process through backbone
+                backbone_output = server.process(backbone_input)
+                
+
+                tail_input = backbone_output.detach().clone().requires_grad_(True)
+
+
+                self.tail.train()
+
+                tail_output = self.tail(tail_input)
+
+            
+                
+                # Client: Compute loss with tail
+                loss = self.compute_loss(tail_output, labels)
+
+                self.tail_optimizer.zero_grad()
+                loss.backward()
+                self.tail_optimizer.step()
+                
+                
+                # Server: Backward pass with gradient
+                server.backward(backbone_output, tail_input.grad)
+                
+                # Client: Complete backward pass
+                self.backward_pass(head_output, backbone_input.grad)
+                
+                # Statistics
+                epoch_loss += loss.item()
+                _, predicted = tail_output.max(1)
+                epoch_total += labels.size(0)
+                epoch_correct += predicted.eq(labels).sum().item()
+            
+            # Calculate epoch statistics
+            accuracy = 100 * epoch_correct / epoch_total
+            avg_loss = epoch_loss / len(self.dataloader)
+            
+            print(f"Client {self.client_id}, Epoch {epoch+1}/{epochs}, "
+                  f"Loss: {avg_loss:.4f}, Accuracy: {accuracy:.2f}%")
+            
+            running_loss += avg_loss
+            correct += epoch_correct
+            total += epoch_total
+        
+        # Overall statistics
+        final_accuracy = 100 * correct / total
+        final_avg_loss = running_loss / epochs
+        
+        return final_avg_loss, final_accuracy
+    
+
+
     def save_models(self):
         """Save client models for next client to use"""
         self.head.save_state_dict(self.head_checkpoint)
