@@ -14,6 +14,7 @@ from models.VGG11 import VGG11Head, VGG11Tail, VGG11Backbone
 from models.VGG19 import VGG19Head, VGG19Tail, VGG19Backbone
 from models.DenseNet121 import DenseNet121Head, DenseNet121Tail, DenseNet121Backbone
 from models.ViT_B16 import ViTB16Head, ViTB16Tail, ViTB16Backbone
+from attacks.wanet import wanet_batch
 
 
 
@@ -157,11 +158,12 @@ class GatedFusion(nn.Module):
 
 # Client implementation
 class Client:
-    def __init__(self, model_name, is_malicious, client_id, dataset, batch_size=32, num_classes=10, device='cpu', 
+    def __init__(self, args,model_name, is_malicious, client_id, dataset, batch_size=32, num_classes=10, device='cpu', 
                  checkpoint_dir="./checkpoints", cut_layer=1):
         self.client_id = client_id
         self.is_malicious = is_malicious
         self.device = device
+        self.args = args
         self.dataset = dataset
         self.dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
         
@@ -325,6 +327,9 @@ class Client:
             epoch_total = 0
             
             for inputs, labels in self.dataloader:
+                if self.args.attack == 'wanet':
+                    inputs, labels = wanet_batch(self.args, (inputs, labels))
+
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
                 
                 # Client: Head forward pass

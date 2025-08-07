@@ -22,6 +22,8 @@ from attacks.attacks import create_poisoned_set, get_wanet_grids
 
 from datasets.handler import get_datasets
 
+from attacks.wanet import wanet_batch
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Split Learning Training')
@@ -128,7 +130,7 @@ class RoundRobinSplitLearningSystem:
 
 # Additional utility functions
 
-def evaluate_model(clients, server, test_dataset, device):
+def evaluate_model(clients, server, test_dataset, device, poisoned=False):
     """Evaluate the model on test data using the latest client model"""
     test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
     
@@ -147,6 +149,9 @@ def evaluate_model(clients, server, test_dataset, device):
     
     with torch.no_grad():
         for inputs, labels in test_loader:
+            if args.attack == 'wanet' and poisoned:
+                inputs, labels = wanet_batch(args, (inputs, labels))
+
             inputs, labels = inputs.to(device), labels.to(device)
             
             # Forward pass through the head
@@ -184,6 +189,7 @@ if __name__ == "__main__":
     
     # Get train and testdatasets
     train_dataset, test_dataset, num_classes = get_datasets(args.dataset.lower())
+    args.num_classes = num_classes
 
     if args.attack == 'wanet':
         args.noise_grid, args.identity_grid = get_wanet_grids(args, train_dataset)
@@ -240,6 +246,7 @@ if __name__ == "__main__":
             subset = poisoned_subset
         
         clients.append(Client(
+            args=args,
             model_name=args.model,
             client_id=i,
             is_malicious=malicious_clients[i],
@@ -258,7 +265,7 @@ if __name__ == "__main__":
     system.train_multiple_rounds(num_rounds=args.num_rounds, epochs_per_client=args.epochs_per_client)
 
     # Evaluate on test set
-    test_accuracy = evaluate_model(clients, server, test_dataset, device)
+    test_accuracy = evaluate_model(clients, server, test_dataset, device, poisoned=False)
     print(f"\nFinal test accuracy after training: {test_accuracy:.2f}%")
 
     # Create a Subset from test_dataset with all its indices
@@ -271,7 +278,7 @@ if __name__ == "__main__":
     poisoned_test_subset, _ = create_poisoned_set(args, test_subset)
     
     # Evaluate the model on the poisoned test set to test ASR
-    asr_accuracy = evaluate_model(clients, server, poisoned_test_subset, device)
+    asr_accuracy = evaluate_model(clients, server, poisoned_test_subset, device, poisoned=True)
     print(f"\nAttack Success Rate (ASR) on poisoned test set: {asr_accuracy:.2f}%")
 
     # saving the results in a csv file

@@ -80,7 +80,7 @@ class WaNetPoisonedDataset(Dataset):
     """
     
     def __init__(self, dataset, backdoor_indices, cross_indices, target_label, attack_mode, 
-                 s=0.5, k=4, grid_rescale=1.0, cross_ratio=2.0):
+                 s=0.5, k=4, grid_rescale=1.0, cross_ratio=2.0, num_classes=10):
         """
         Args:
             dataset: The original dataset
@@ -102,6 +102,7 @@ class WaNetPoisonedDataset(Dataset):
         self.k = k
         self.grid_rescale = grid_rescale
         self.cross_ratio = cross_ratio
+        self.num_classes = num_classes
         
         # Get image dimensions from first sample
         self.channels, self.height, self.width, self.input_height = determine_input_dimensions(dataset)
@@ -224,16 +225,7 @@ class WaNetPoisonedDataset(Dataset):
             if self.attack_mode == 'all-to-one':
                 poisoned_label = self.target_label
             else:  # all-to-all
-                # Get number of classes from dataset or assume based on target_label
-                if hasattr(self.dataset, 'classes'):
-                    num_classes = len(self.dataset.classes)
-                elif hasattr(self.dataset.dataset, 'classes'):  # For Subset
-                    num_classes = len(self.dataset.dataset.classes) 
-                else:
-                    # Estimate from target_label (assume 0-indexed)
-                    num_classes = max(10, self.target_label + 1)
-                
-                poisoned_label = (label + 1) % num_classes
+                poisoned_label = (label + 1) % self.num_classes
             
             return warped_image, poisoned_label
             
@@ -295,7 +287,8 @@ def create_wanet_poisoned_trainset(args, subset):
         s=0.5,  # max pixel displacement
         k=4,    # control grid resolution
         grid_rescale=1.0,  # safety factor
-        cross_ratio=cross_ratio
+        cross_ratio=cross_ratio,
+        num_classes=args.num_classes
     )
     poisoned_dataset.set_grids(args.noise_grid, args.identity_grid)
     
@@ -341,7 +334,8 @@ def create_wanet_poisoned_testset(args, subset):
         s=0.5,  # max pixel displacement
         k=4,    # control grid resolution
         grid_rescale=1.0,  # safety factor
-        cross_ratio=2.0
+        cross_ratio=2.0,
+        num_classes=args.num_classes
     )
     poisoned_dataset.set_grids(args.noise_grid, args.identity_grid)
     
@@ -349,9 +343,117 @@ def create_wanet_poisoned_testset(args, subset):
 
 
 
-# TODO: as avval bayad beshinam ino ba asle kari moghayese konam! 
-# TODO: masalan tu asle kari yek bar identity grid va noise grid sakhte mishe! vali man daram harbar ye dataset jadid 
-# dorost mikonam! 
 
-# TODO: num_classes ro vazife dare uni ke seda mekone khodesh bedeh! na inke ma handle konim!
+def wanet_batch(args, batch):
+    """
+    Apply WaNet backdoor attack to a batch of images on-the-fly.
+    
+    This function follows the original WaNet batch processing logic:
+    - For training (poisoning_rate < 1.0): Apply backdoor + cross samples
+    - For testing (poisoning_rate == 1.0): Apply only backdoor samples
+    
+    Args:
+        args: Arguments containing poisoning_rate, target_label, attack_mode, 
+              noise_grid, identity_grid, etc.
+        batch: Tuple of (inputs, labels) where inputs has shape (batch_size, C, H, W)
+              
+    Returns:
+        tuple: (poisoned_inputs, poisoned_labels) - same batch size as input
+    """
+    inputs, labels = batch
+    bs = inputs.size(0)  # batch size
+    device = inputs.device
+    
+    # Get grids from args (should be pre-generated)
+    noise_grid = args.noise_grid.to(device)
+    identity_grid = args.identity_grid.to(device)
+    
+    # WaNet parameters
+    s = 0.5
+    grid_rescale = 1.0
+    cross_ratio = 2.0
+    
+    # Get input dimensions
+    input_height = inputs.shape[-1]  # Assume square images
+    
+    # Build base warping grid (fixed trigger)
+    grid_temps = (identity_grid + s * noise_grid / input_height) * grid_rescale
+    grid_temps = torch.clamp(grid_temps, -1, 1)
+    
+    if args.poisoning_rate >= 1.0:
+        # Testing mode: poison all samples with backdoor only (no cross samples)
+        inputs_bd = F.grid_sample(
+            inputs,
+            grid_temps.repeat(bs, 1, 1, 1),
+            align_corners=True
+        )
+        
+        # Change all labels based on attack mode
+        if args.attack_mode == "all-to-one":
+            targets_bd = torch.full_like(labels, args.target_label)
+        else:  # all-to-all
+            targets_bd = torch.remainder(labels + 1, args.num_classes)
+            
+        return inputs_bd, targets_bd
+        
+    else:
+        # Training mode: apply backdoor + cross samples logic
+        pc = args.poisoning_rate
+        num_bd = int(bs * pc)  # backdoor samples
+        num_cross = int(num_bd * cross_ratio)  # cross samples
+        
+        # Ensure we don't exceed batch size
+        if num_bd + num_cross > bs:
+            num_cross = bs - num_bd
+            
+        # (a) Backdoor samples: first num_bd samples
+        if num_bd > 0:
+            inputs_bd = F.grid_sample(
+                inputs[:num_bd],
+                grid_temps.repeat(num_bd, 1, 1, 1),
+                align_corners=True
+            )
+            
+            # Change labels for backdoor samples
+            if args.attack_mode == "all-to-one":
+                targets_bd = torch.full_like(labels[:num_bd], args.target_label)
+            else:  # all-to-all
+                targets_bd = torch.remainder(labels[:num_bd] + 1, args.num_classes)
+        else:
+            inputs_bd = torch.empty(0, *inputs.shape[1:], device=device)
+            targets_bd = torch.empty(0, dtype=labels.dtype, device=device)
+            
+        # (b) Cross samples: next num_cross samples (fixed trigger + random warp)
+        if num_cross > 0:
+            # Generate random field for cross samples
+            rand_field = (torch.rand(num_cross, input_height, input_height, 2, device=device) * 2 - 1)
+            grid_temps2 = grid_temps.repeat(num_cross, 1, 1, 1) + rand_field / input_height
+            grid_temps2 = torch.clamp(grid_temps2, -1, 1)
+            
+            inputs_cross = F.grid_sample(
+                inputs[num_bd:num_bd + num_cross],
+                grid_temps2,
+                align_corners=True
+            )
+        else:
+            inputs_cross = torch.empty(0, *inputs.shape[1:], device=device)
+            
+        # (c) Clean samples: remaining samples (no modification)
+        inputs_clean = inputs[num_bd + num_cross:]
+        
+        # Concatenate all inputs and labels
+        total_inputs = torch.cat([
+            inputs_bd, 
+            inputs_cross,
+            inputs_clean
+        ], dim=0)
+        
+        # For labels: backdoor samples get new labels, cross and clean keep original
+        total_labels = torch.cat([
+            targets_bd,
+            labels[num_bd:]  # cross samples keep original labels + clean samples
+        ], dim=0)
+        
+        return total_inputs, total_labels
 
+        
