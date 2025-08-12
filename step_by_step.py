@@ -47,7 +47,7 @@ def parse_args():
                       help='Experiment number (default: 0)')
     parser.add_argument('--dataset', type=str, default='CIFAR10', choices=['CIFAR10', 'CIFAR100'],
                       help='Dataset to use (default: CIFAR10)')
-    parser.add_argument('--attack', type=str, default='badnet', choices=['badnet', 'wanet'],
+    parser.add_argument('--attack', type=str, default='badnet', choices=['badnet', 'wanet', 'blend'],
                       help='Attack type to use (default: badnet)')
     parser.add_argument('--trigger_size', type=float, default=0.08,
                       help='Trigger size for badnet attack (default: 0.08)')
@@ -64,6 +64,10 @@ def parse_args():
                       help='WaNet parameter for grid rescaling (default: 1.0)')
     parser.add_argument('--cross_ratio', type=float, default=2.0,
                       help='WaNet parameter for cross ratio (default: 2.0)')
+    
+    # Blend-specific parameters
+    parser.add_argument('--blend_alpha', type=float, default=0.2,
+                      help='Blend parameter alpha for blending (default: 0.2)')
     
     
     return parser.parse_args()
@@ -188,6 +192,7 @@ if __name__ == "__main__":
     
     # Get train and testdatasets
     train_dataset, test_dataset, num_classes = get_datasets(args.dataset.lower())
+    args.num_classes = num_classes
 
     if args.attack == 'wanet':
         args.noise_grid, args.identity_grid = get_wanet_grids(args, train_dataset)
@@ -248,6 +253,7 @@ if __name__ == "__main__":
             subset = poisoned_subset
         
         clients.append(Client(
+            args=args,
             model_name=args.model,
             client_id=i,
             is_malicious=malicious_clients[i],
@@ -275,12 +281,14 @@ if __name__ == "__main__":
     test_subset = torch.utils.data.Subset(test_dataset, test_indices)
     
     # Create a poisoned dataset with full poisoning rate
+    real_poisoning_rate = args.poisoning_rate
     args.poisoning_rate = 1.0
     poisoned_test_subset, _ = create_poisoned_set(args, test_subset)
     
     # Evaluate the model on the poisoned test set to test ASR
     asr_accuracy = evaluate_model(clients, server, poisoned_test_subset, device)
     print(f"\nAttack Success Rate (ASR) on poisoned test set: {asr_accuracy:.2f}%")
+    args.poisoning_rate = real_poisoning_rate
 
     # saving the results in a csv file
     results_path = Path("./results")

@@ -21,5 +21,12 @@ module load Python/3.11.3-GCCcore-12.3.0
 
 # srun python normal_sl.py --model resnet18 --dataset CIFAR10 --cut_layer 1 --num_clients 10 --num_rounds 40
 
-srun python dummy_train.py
+# srun python attack_only.py --attack blend --poisoning_rate 0.05 
 # srun torchrun --standalone --nproc_per_node=4 /home/htajalli/prjs0962/repos/BA_NODE/temp_test_torchrun.py
+
+# srun python dummy_train.py
+# srun python test_wanet.py
+
+# srun python step_by_step.py --model resnet50
+
+

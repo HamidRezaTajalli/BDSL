@@ -314,15 +314,12 @@ def create_wanet_poisoned_testset(args, subset):
     """
     num_samples = len(subset)
     
-    if args.poisoning_rate == 1.0:
+    if args.poisoning_rate >= 1.0:
         # Poison all samples for ASR evaluation (only backdoor, no cross samples)
         backdoor_indices = list(range(num_samples))
         cross_indices = []  # No cross samples for test set
     else:
-        # Poison specified percentage (only backdoor samples for test)
-        num_backdoor = int(num_samples * args.poisoning_rate)
-        backdoor_indices = np.random.choice(num_samples, num_backdoor, replace=False).tolist()
-        cross_indices = []  # No cross samples for test set
+        raise ValueError("Poisoning rate must be 1.0 for test set")
     
     # Create poisoned dataset wrapper
     poisoned_dataset = WaNetPoisonedDataset(
