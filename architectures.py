@@ -164,7 +164,7 @@ class Client:
         self.device = device
         self.args = args
         self.dataset = dataset
-        self.dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        self.dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=self.args.num_workers)
         
         if model_name == 'resnet18':
             self.head = ResNet18Head(in_channels=3, cut_layer=cut_layer).to(device)

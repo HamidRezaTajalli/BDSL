@@ -33,8 +33,10 @@ def parse_args():
                       help='Number of training rounds (default: 40)')
     parser.add_argument('--epochs_per_client', type=int, default=1,
                       help='Number of epochs per client per round (default: 1)')
-    parser.add_argument('--batch_size', type=int, default=32,
-                      help='Batch size for training (default: 32)')
+    parser.add_argument('--batch_size', type=int, default=256,
+                      help='Batch size for training (default: 256)')
+    parser.add_argument('--num_workers', type=int, default=0,
+                      help='Number of workers for data loading (default: 0)')
     parser.add_argument('--cut_layer', type=int, default=1,
                       help='Cut layer for model splitting (default: 1)')
     parser.add_argument('--checkpoint_dir', type=str, default='./split_learning_checkpoints',
@@ -137,9 +139,9 @@ class RoundRobinSplitLearningSystem:
 
 # Additional utility functions
 
-def evaluate_model(clients, server, test_dataset, device):
+def evaluate_model(clients, server, test_dataset, device, num_workers=0):
     """Evaluate the model on test data using the latest client model"""
-    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False, num_workers=num_workers)
     
     # Use the last client's models for evaluation
     last_client = clients[-1]
@@ -272,7 +274,7 @@ if __name__ == "__main__":
     system.train_multiple_rounds(num_rounds=args.num_rounds, epochs_per_client=args.epochs_per_client)
 
     # Evaluate on test set
-    test_accuracy = evaluate_model(clients, server, test_dataset, device)
+    test_accuracy = evaluate_model(clients, server, test_dataset, device, num_workers=args.num_workers)
     print(f"\nFinal test accuracy after training: {test_accuracy:.2f}%")
 
     # Create a Subset from test_dataset with all its indices
@@ -286,7 +288,7 @@ if __name__ == "__main__":
     poisoned_test_subset, _ = create_poisoned_set(args, test_subset)
     
     # Evaluate the model on the poisoned test set to test ASR
-    asr_accuracy = evaluate_model(clients, server, poisoned_test_subset, device)
+    asr_accuracy = evaluate_model(clients, server, poisoned_test_subset, device, num_workers=args.num_workers)
     print(f"\nAttack Success Rate (ASR) on poisoned test set: {asr_accuracy:.2f}%")
     args.poisoning_rate = real_poisoning_rate
 
