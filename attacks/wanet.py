@@ -314,7 +314,7 @@ def create_wanet_poisoned_testset(args, subset):
     """
     num_samples = len(subset)
     
-    if args.poisoning_rate >= 1.0:
+    if args.poisoning_rate == 1.0:
         # Poison all samples for ASR evaluation (only backdoor, no cross samples)
         backdoor_indices = list(range(num_samples))
         cross_indices = []  # No cross samples for test set
