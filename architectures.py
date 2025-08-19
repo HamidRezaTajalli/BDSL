@@ -113,7 +113,19 @@ class GatedFusion(nn.Module):
             nn.Sigmoid()
         )
 
-        self.optimizer = optim.Adam(self.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
+        # Model-specific optimizers for gated fusion
+        if model_name in ['resnet18', 'resnet50', 'densenet121']:
+            # Adam for ResNet and DenseNet
+            self.optimizer = optim.Adam(self.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
+        elif model_name == 'vit_b16':
+            # AdamW for Vision Transformer
+            self.optimizer = optim.AdamW(self.parameters(), lr=3e-4, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.05)
+        elif model_name in ['vgg11', 'vgg19']:
+            # SGD with momentum for VGG models
+            self.optimizer = optim.SGD(self.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
+        else:
+            # Default to Adam for unknown models
+            self.optimizer = optim.Adam(self.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
 
         self.checkpoint_dir = checkpoint_dir
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -188,8 +200,24 @@ class Client:
             raise Exception(f"Model {model_name} not supported")
         
         self.criterion = nn.CrossEntropyLoss()
-        self.head_optimizer = optim.Adam(self.head.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
-        self.tail_optimizer = optim.Adam(self.tail.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
+        
+        # Model-specific optimizers
+        if model_name in ['resnet18', 'resnet50', 'densenet121']:
+            # Adam for ResNet and DenseNet
+            self.head_optimizer = optim.Adam(self.head.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
+            self.tail_optimizer = optim.Adam(self.tail.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
+        elif model_name == 'vit_b16':
+            # AdamW for Vision Transformer
+            self.head_optimizer = optim.AdamW(self.head.parameters(), lr=3e-4, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.05)
+            self.tail_optimizer = optim.AdamW(self.tail.parameters(), lr=3e-4, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.05)
+        elif model_name in ['vgg11', 'vgg19']:
+            # SGD with momentum for VGG models
+            self.head_optimizer = optim.SGD(self.head.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
+            self.tail_optimizer = optim.SGD(self.tail.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
+        else:
+            # Default to Adam for unknown models
+            self.head_optimizer = optim.Adam(self.head.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
+            self.tail_optimizer = optim.Adam(self.tail.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
         
         # Checkpoint directory
         self.checkpoint_dir = checkpoint_dir
@@ -409,6 +437,7 @@ class Client:
 # Server implementation
 class Server:
     def __init__(self, model_name, num_classes=10, device='cpu', checkpoint_dir="./checkpoints", cut_layer=1):
+        self.model_name = model_name
         self.device = device
         if model_name == 'resnet18':
             self.backbone = ResNet18Backbone(cut_layer=cut_layer).to(device)
@@ -425,7 +454,19 @@ class Server:
         else:
             raise Exception(f"Model {model_name} not supported")
             
-        self.backbone_optimizer = optim.Adam(self.backbone.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
+        # Model-specific optimizers for backbone
+        if model_name in ['resnet18', 'resnet50', 'densenet121']:
+            # Adam for ResNet and DenseNet
+            self.backbone_optimizer = optim.Adam(self.backbone.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
+        elif model_name == 'vit_b16':
+            # AdamW for Vision Transformer
+            self.backbone_optimizer = optim.AdamW(self.backbone.parameters(), lr=3e-4, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.05)
+        elif model_name in ['vgg11', 'vgg19']:
+            # SGD with momentum for VGG models
+            self.backbone_optimizer = optim.SGD(self.backbone.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
+        else:
+            # Default to Adam for unknown models
+            self.backbone_optimizer = optim.Adam(self.backbone.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
         self.last_input = None
         
         # Checkpoint directory

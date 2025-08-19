@@ -33,8 +33,8 @@ def parse_args():
                       help='Number of training rounds (default: 40)')
     parser.add_argument('--epochs_per_client', type=int, default=1,
                       help='Number of epochs per client per round (default: 1)')
-    parser.add_argument('--batch_size', type=int, default=256,
-                      help='Batch size for training (default: 256)')
+    parser.add_argument('--batch_size', type=int, default=128,
+                      help='Batch size for training (default: 128)')
     parser.add_argument('--num_workers', type=int, default=0,
                       help='Number of workers for data loading (default: 0)')
     parser.add_argument('--cut_layer', type=int, default=1,

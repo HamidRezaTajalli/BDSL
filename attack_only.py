@@ -30,12 +30,12 @@ def parse_args():
                       help='Model architecture to use (default: resnet18)')
     parser.add_argument('--num_clients', type=int, default=10,
                       help='Number of clients (default: 10)')
-    parser.add_argument('--num_rounds', type=int, default=40,
-                      help='Number of training rounds (default: 40)')
+    parser.add_argument('--num_rounds', type=int, default=100,
+                      help='Number of training rounds (default: 100)')
     parser.add_argument('--epochs_per_client', type=int, default=1,
                       help='Number of epochs per client per round (default: 1)')
-    parser.add_argument('--batch_size', type=int, default=256,
-                      help='Batch size for training (default: 256)')
+    parser.add_argument('--batch_size', type=int, default=128,
+                      help='Batch size for training (default: 128)')
     parser.add_argument('--num_workers', type=int, default=0,
                       help='Number of workers for data loading (default: 0)')
     parser.add_argument('--cut_layer', type=int, default=1,
@@ -50,7 +50,7 @@ def parse_args():
                       help='Experiment number (default: 0)')
     parser.add_argument('--dataset', type=str, default='CIFAR10', choices=['CIFAR10', 'CIFAR100'],
                       help='Dataset to use (default: CIFAR10)')
-    parser.add_argument('--attack', type=str, default='wanet', choices=['badnet', 'wanet', 'blend'],
+    parser.add_argument('--attack', type=str, default='badnet', choices=['badnet', 'wanet', 'blend'],
                       help='Attack type to use (default: badnet)')
     parser.add_argument('--trigger_size', type=float, default=0.08,
                       help='Trigger size for badnet attack (default: 0.08)')
@@ -176,6 +176,10 @@ def evaluate_model(clients, server, test_dataset, device, poisoned=False, num_wo
 # Example usage with CIFAR-10
 if __name__ == "__main__":
     args = parse_args()
+
+    # if model is vit_b16, then we need to increase the number of rounds to 200 and the batch size to 512
+    if args.model == 'vit_b16':
+        args.batch_size = 256
 
 
     print("="*50)
