@@ -40,8 +40,8 @@ def parse_args():
                       help='Number of workers for data loading (default: 0)')
     parser.add_argument('--cut_layer', type=int, default=1,
                       help='Cut layer for model splitting (default: 1)')
-    parser.add_argument('--checkpoint_dir', type=str, default='./split_learning_checkpoints',
-                      help='Directory to save checkpoints (default: ./split_learning_checkpoints)')
+    parser.add_argument('--checkpoint_dir', type=str, default='./attack_only_checkpoints',
+                      help='Directory to save checkpoints (default: ./attack_only_checkpoints)')
     parser.add_argument('--poisoning_rate', type=float, default=0.1,
                       help='Poisoning rate for malicious clients (default: 0.1)')
     parser.add_argument('--target_label', type=int, default=0,
@@ -208,7 +208,7 @@ if __name__ == "__main__":
     if not checkpoint_dir.exists():
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    suffix = f"_{args.model}_{args.cut_layer}_{args.num_clients}_{args.num_rounds}_{args.epochs_per_client}_{args.poisoning_rate}"
+    suffix = f"_{args.exp_num}_{args.model}_{args.dataset}_{args.cut_layer}_{args.num_clients}_{args.num_rounds}_{args.epochs_per_client}_{args.poisoning_rate}_{args.target_label}_{args.attack}_{args.trigger_size}_{args.attack_mode}"
 
     checkpoint_dir = checkpoint_dir / suffix
     if not checkpoint_dir.exists():
