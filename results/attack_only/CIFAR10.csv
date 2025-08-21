@@ -1,0 +1,17 @@
+EXP_ID,MODEL,DATASET,CUT_LAYER,NUM_CLIENTS,NUM_ROUNDS,EPOCHS_PER_CLIENT,POISONING_RATE,TARGET_LABEL,ATTACK,TRIGGER_SIZE,ATTACK_MODE,CDA,ASR
+0,resnet18,CIFAR10,1,10,60,1,0.0,0,badnet,0.08,all-to-one,82.14,0.1
+0,resnet18,CIFAR10,1,10,60,1,0.1,0,blend,0.08,all-to-one,81.66,96.28
+0,resnet18,CIFAR10,1,10,60,1,0.1,0,badnet,0.08,all-to-one,83.4,98.97
+0,resnet18,CIFAR10,1,10,60,1,0.0,0,blend,0.08,all-to-one,83.33,11.4
+0,resnet50,CIFAR10,1,10,60,1,0.0,0,badnet,0.08,all-to-one,83.14,0.08
+0,resnet50,CIFAR10,1,10,60,1,0.1,0,badnet,0.08,all-to-one,83.56,99.28
+0,resnet50,CIFAR10,1,10,60,1,0.0,0,blend,0.08,all-to-one,83.77,17.17
+0,resnet50,CIFAR10,1,10,60,1,0.1,0,blend,0.08,all-to-one,83.18,97.99
+0,densenet121,CIFAR10,1,10,60,1,0.1,0,blend,0.08,all-to-one,89.43,99.44
+0,densenet121,CIFAR10,1,10,60,1,0.0,0,badnet,0.08,all-to-one,87.46,7.69
+0,densenet121,CIFAR10,1,10,60,1,0.1,0,badnet,0.08,all-to-one,87.33,98.85
+0,densenet121,CIFAR10,1,10,60,1,0.0,0,blend,0.08,all-to-one,88.4,15.28
+0,vit_b16,CIFAR10,1,10,60,1,0.0,0,badnet,0.08,all-to-one,19960.918806561036,91.66,7.01
+0,vit_b16,CIFAR10,1,10,60,1,0.0,0,blend,0.08,all-to-one,19983.826328756986,91.84,18.98
+0,vit_b16,CIFAR10,1,10,60,1,0.1,0,badnet,0.08,all-to-one,19975.0551625879,90.34,99.7
+0,vit_b16,CIFAR10,1,10,60,1,0.1,0,blend,0.08,all-to-one,19975.01965555502,92.64,99.91

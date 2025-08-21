@@ -143,12 +143,15 @@ class GatedFusion(nn.Module):
         else:
             # For CNN models: z2 is [B, C, H, W]
             z2_pooled = self.pool_z2(z2)  # [B, C, 4, 4]
+            print(f"z2_pooled.shape: {z2_pooled.shape}")
             z2_flat = z2_pooled.view(z2_pooled.size(0), -1)  # [B, C*4*4]
+            print(f"z2_flat.shape: {z2_flat.shape}")
             z2_proj = self.z2_proj(z2_flat)  # [B, z1_dim]
-
+            print(f"z2_proj.shape: {z2_proj.shape}")
         z_cat = torch.cat([z1, z2_proj], dim=1)  # [B, z1_dim + z1_dim]
+        print(f"z_cat.shape: {z_cat.shape}")
         g = self.gate(z_cat)  # [B, z1_dim]
-        
+        print(f"g.shape: {g.shape}")
         fused = g * z1 + (1 - g) * z2_proj  # weighted fusion
         return fused  # [B, z1_dim]
 
@@ -264,22 +267,32 @@ class Client:
             
             for inputs, labels in self.dataloader:
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
+
+                print(f"inputs.shape: {inputs.shape}")
+                print(f"labels.shape: {labels.shape}")
+                print(f"inputs.dtype: {inputs.dtype}")
+                print(f"labels.dtype: {labels.dtype}")
                 
                 # Client: Head forward pass
                 head_output = self.head(inputs)
+                print(f"head_output.shape: {head_output.shape}")
 
                 backbone_input = head_output.detach().clone().requires_grad_(True)
                 gate_input_z2 = head_output.detach().clone().requires_grad_(True)
+                print(f"backbone_input.shape: {backbone_input.shape}")
+                print(f"gate_input_z2.shape: {gate_input_z2.shape}")
                 
                 # Server: Process through backbone
-                backbone_output = server.process(backbone_input)
-                
+                backbone_output = server.process(backbone_input)                
+                print(f"backbone_output.shape: {backbone_output.shape}")
 
                 # tail_input = backbone_output.detach().clone().requires_grad_(True)
                 gate_input_z1 = backbone_output.detach().clone().requires_grad_(True)
-
+                print(f"gate_input_z1.shape: {gate_input_z1.shape}")
 
                 gate_output = gated_fusion(gate_input_z1, gate_input_z2)
+                print(f"gate_output.shape: {gate_output.shape}")
+                exit()
 
                 tail_input = gate_output.detach().clone().requires_grad_(True)
 
