@@ -23,7 +23,6 @@ from attacks.attacks import create_poisoned_set, get_wanet_grids
 from datasets.handler import get_datasets
 
 
-
 def parse_args():
     parser = argparse.ArgumentParser(description='Split Learning Training')
     parser.add_argument('--model', type=str, default='resnet18', choices=['resnet18', 'resnet50', 'vgg11', 'vgg19', 'densenet121', 'vit_b16'],
@@ -135,7 +134,7 @@ class RoundRobinSplitLearningSystem:
 
 # Additional utility functions
 
-def evaluate_model(clients, server, test_dataset, device, poisoned=False, num_workers=0):
+def evaluate_model(clients, server, test_dataset, device, num_workers=0):
     """Evaluate the model on test data using the latest client model"""
     test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False, num_workers=num_workers)
     
@@ -154,7 +153,6 @@ def evaluate_model(clients, server, test_dataset, device, poisoned=False, num_wo
     
     with torch.no_grad():
         for inputs, labels in test_loader:
-
             inputs, labels = inputs.to(device), labels.to(device)
             
             # Forward pass through the head
@@ -188,7 +186,6 @@ if __name__ == "__main__":
     print(args)
     print("="*50)
     
-
     
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -267,12 +264,18 @@ if __name__ == "__main__":
     
     # Create round-robin split learning system
     system = RoundRobinSplitLearningSystem(server, clients, checkpoint_dir=args.checkpoint_dir)
+
+    start_time = time.perf_counter()
     
     # Train for multiple rounds
     system.train_multiple_rounds(num_rounds=args.num_rounds, epochs_per_client=args.epochs_per_client)
 
+    end_time = time.perf_counter()
+    elapsed_time = end_time - start_time
+    print(f"Training time: {elapsed_time:.2f}s")
+
     # Evaluate on test set
-    test_accuracy = evaluate_model(clients, server, test_dataset, device, poisoned=False, num_workers=args.num_workers)
+    test_accuracy = evaluate_model(clients, server, test_dataset, device, num_workers=args.num_workers)
     print(f"\nFinal test accuracy after training: {test_accuracy:.2f}%")
 
     # Create a Subset from test_dataset with all its indices
@@ -286,7 +289,7 @@ if __name__ == "__main__":
     poisoned_test_subset, _ = create_poisoned_set(args, test_subset)
     
     # Evaluate the model on the poisoned test set to test ASR
-    asr_accuracy = evaluate_model(clients, server, poisoned_test_subset, device, poisoned=True, num_workers=args.num_workers)
+    asr_accuracy = evaluate_model(clients, server, poisoned_test_subset, device, num_workers=args.num_workers)
     print(f"\nAttack Success Rate (ASR) on poisoned test set: {asr_accuracy:.2f}%")
     args.poisoning_rate = real_poisoning_rate
 
@@ -298,7 +301,7 @@ if __name__ == "__main__":
     csv_file_address = results_path / f"{args.dataset}.csv"
     if not csv_file_address.exists():
         csv_file_address.touch()
-        csv_header = ['EXP_ID', 'MODEL', 'DATASET', 'CUT_LAYER', 'NUM_CLIENTS', 'NUM_ROUNDS', 'EPOCHS_PER_CLIENT', 'POISONING_RATE', 'TARGET_LABEL', 'ATTACK', 'TRIGGER_SIZE', 'ATTACK_MODE', 'CDA', 'ASR']
+        csv_header = ['EXP_ID', 'MODEL', 'DATASET', 'CUT_LAYER', 'NUM_CLIENTS', 'NUM_ROUNDS', 'EPOCHS_PER_CLIENT', 'POISONING_RATE', 'TARGET_LABEL', 'ATTACK', 'TRIGGER_SIZE', 'ATTACK_MODE', 'ET', 'CDA', 'ASR']
         with open(csv_file_address, 'w') as f:
             writer = csv.writer(f)
             writer.writerow(csv_header)
@@ -306,7 +309,7 @@ if __name__ == "__main__":
 
     with open(csv_file_address, 'a') as f:
         writer = csv.writer(f)
-        writer.writerow([args.exp_num, args.model, args.dataset, args.cut_layer, args.num_clients, args.num_rounds, args.epochs_per_client, args.poisoning_rate, args.target_label, args.attack, args.trigger_size, args.attack_mode, test_accuracy, asr_accuracy])
+        writer.writerow([args.exp_num, args.model, args.dataset, args.cut_layer, args.num_clients, args.num_rounds, args.epochs_per_client, args.poisoning_rate, args.target_label, args.attack, args.trigger_size, args.attack_mode, elapsed_time, test_accuracy, asr_accuracy])
 
     
 

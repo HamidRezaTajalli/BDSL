@@ -29,8 +29,8 @@ def parse_args():
                       help='Model architecture to use (default: resnet18)')
     parser.add_argument('--num_clients', type=int, default=10,
                       help='Number of clients (default: 10)')
-    parser.add_argument('--num_rounds', type=int, default=40,
-                      help='Number of training rounds (default: 40)')
+    parser.add_argument('--num_rounds', type=int, default=100,
+                      help='Number of training rounds (default: 100)')
     parser.add_argument('--epochs_per_client', type=int, default=1,
                       help='Number of epochs per client per round (default: 1)')
     parser.add_argument('--batch_size', type=int, default=128,
@@ -270,8 +270,14 @@ if __name__ == "__main__":
     # Create round-robin split learning system
     system = RoundRobinSplitLearningSystem(server, clients, gated_fusion, checkpoint_dir=args.checkpoint_dir)
     
+    start_time = time.perf_counter()
+
     # Train for multiple rounds
     system.train_multiple_rounds(num_rounds=args.num_rounds, epochs_per_client=args.epochs_per_client)
+
+    end_time = time.perf_counter()
+    elapsed_time = end_time - start_time
+    print(f"Training time: {elapsed_time:.2f}s")
 
     # Evaluate on test set
     test_accuracy = evaluate_model(clients, server, test_dataset, device, num_workers=args.num_workers)
@@ -300,7 +306,7 @@ if __name__ == "__main__":
     csv_file_address = results_path / f"{args.dataset}.csv"
     if not csv_file_address.exists():
         csv_file_address.touch()
-        csv_header = ['EXP_ID', 'MODEL', 'DATASET', 'CUT_LAYER', 'NUM_CLIENTS', 'NUM_ROUNDS', 'EPOCHS_PER_CLIENT', 'POISONING_RATE', 'TARGET_LABEL', 'ATTACK', 'TRIGGER_SIZE', 'ATTACK_MODE', 'CDA', 'ASR']
+        csv_header = ['EXP_ID', 'MODEL', 'DATASET', 'CUT_LAYER', 'NUM_CLIENTS', 'NUM_ROUNDS', 'EPOCHS_PER_CLIENT', 'POISONING_RATE', 'TARGET_LABEL', 'ATTACK', 'TRIGGER_SIZE', 'ATTACK_MODE', 'ET', 'CDA', 'ASR']
         with open(csv_file_address, 'w') as f:
             writer = csv.writer(f)
             writer.writerow(csv_header)
@@ -308,7 +314,7 @@ if __name__ == "__main__":
 
     with open(csv_file_address, 'a') as f:
         writer = csv.writer(f)
-        writer.writerow([args.exp_num, args.model, args.dataset, args.cut_layer, args.num_clients, args.num_rounds, args.epochs_per_client, args.poisoning_rate, args.target_label, args.attack, args.trigger_size, args.attack_mode, test_accuracy, asr_accuracy])
+        writer.writerow([args.exp_num, args.model, args.dataset, args.cut_layer, args.num_clients, args.num_rounds, args.epochs_per_client, args.poisoning_rate, args.target_label, args.attack, args.trigger_size, args.attack_mode, elapsed_time, test_accuracy, asr_accuracy])
 
     
 
