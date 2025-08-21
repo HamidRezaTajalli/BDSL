@@ -23,3 +23,9 @@
 
 # everything in dummy images directory
 /dummy_images/*
+
+
+# saved models files
+*.pth
+*.pt
+*.pkl
