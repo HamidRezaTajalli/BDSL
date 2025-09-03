@@ -70,6 +70,15 @@ def parse_args():
     # Blend-specific parameters
     parser.add_argument('--blend_alpha', type=float, default=0.2,
                       help='Blend parameter alpha for blending (default: 0.2)')
+    
+    # SIG-specific parameters: delta_s, delta_t, f
+    parser.add_argument('--delta_s', type=int, default=60,
+                      help='SIG parameter delta_s for signal strength (default: 60)')
+    parser.add_argument('--delta_t', type=int, default=30,
+                      help='SIG parameter delta_t for signal strength (default: 30)')
+    parser.add_argument('--f', type=int, default=6,
+                      help='SIG parameter f for signal frequency (default: 6)')
+
 
                       
     return parser.parse_args()
