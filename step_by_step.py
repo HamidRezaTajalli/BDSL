@@ -49,7 +49,7 @@ def parse_args():
                       help='Experiment number (default: 0)')
     parser.add_argument('--dataset', type=str, default='CIFAR10', choices=['CIFAR10', 'CIFAR100'],
                       help='Dataset to use (default: CIFAR10)')
-    parser.add_argument('--attack', type=str, default='badnet', choices=['badnet', 'wanet', 'blend'],
+    parser.add_argument('--attack', type=str, default='badnet', choices=['badnet', 'wanet', 'blend', 'sig'],
                       help='Attack type to use (default: badnet)')
     parser.add_argument('--trigger_size', type=float, default=0.08,
                       help='Trigger size for badnet attack (default: 0.08)')
@@ -202,6 +202,7 @@ if __name__ == "__main__":
     # Get train and testdatasets
     train_dataset, test_dataset, num_classes = get_datasets(args.dataset.lower())
     args.num_classes = num_classes
+    args.delta = args.delta_t
 
     if args.attack == 'wanet':
         args.noise_grid, args.identity_grid = get_wanet_grids(args, train_dataset)
@@ -298,6 +299,7 @@ if __name__ == "__main__":
     # Create a poisoned dataset with full poisoning rate
     real_poisoning_rate = args.poisoning_rate
     args.poisoning_rate = 1.0
+    args.delta = args.delta_s
     poisoned_test_subset, _ = create_poisoned_set(args, test_subset)
     
     # Evaluate the model on the poisoned test set to test ASR

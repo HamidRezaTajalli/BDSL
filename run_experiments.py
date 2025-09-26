@@ -10,28 +10,34 @@ if not job_executer_files_path.exists():
 template_file_address = Path("./job_executer.sh")
 
 # Parameter lists based on utils.py arguments
-model_list = ["resnet18", "resnet50", "vgg11", "vgg19", "densenet121", "vit_b16"]
+model_list = ["resnet18", "resnet50", "vgg19", "densenet121", "vit_b16"]
+model_list = ["resnet18"]
 dataset_list = ["CIFAR10"]
 num_clients_list = [10]
-num_rounds_list = [40]
+num_rounds_list = [60]
 epochs_per_client_list = [1]
-batch_size_list = [32]
+batch_size_list = [128]
 cut_layer_list = [1]
-poisoning_rate_list = [0.1]
+poisoning_rate_list = [0.2]
 target_label_list = [0]
+num_workers = 14
 
 # Additional parameter lists for attack_only.py
-attack_list = ["badnet", "wanet", "blend"]
+attack_list = ["badnet", "blend", "sig"]
+attack_list = ["sig"]
 trigger_size_list = [0.08]
 attack_mode_list = ["all-to-one"]
 
 # Experiment configuration
 num_exp = 1
 exp_num_list = range(0, num_exp)
-checkpoint_dir = "./split_learning_checkpoints"
 
-######### Split Learning Backdoor Experiments #############################
-###############################################################
+
+
+
+###########################################################################
+######################### attack only experiments #########################
+###########################################################################
 
 # for exp_num in exp_num_list:
 #     for dataset in dataset_list:
@@ -42,42 +48,42 @@ checkpoint_dir = "./split_learning_checkpoints"
 #                         for cut_layer in cut_layer_list:
 #                             for poisoning_rate in poisoning_rate_list:
 #                                 for target_label in target_label_list:
-#                                     job_script_file = f"exp_{exp_num}_{dataset}_{model}_{num_clients}_{num_rounds}_{epochs_per_client}_{cut_layer}_{poisoning_rate}_{target_label}.sh"
-#                                     job_script_file_address = job_executer_files_path / Path(job_script_file)
+#                                     for attack in attack_list:
+#                                         for trigger_size in trigger_size_list:
+#                                             for attack_mode in attack_mode_list:
+#                                                 job_script_file = f"attack_exp_{exp_num}_{dataset}_{model}_{num_clients}_{num_rounds}_{epochs_per_client}_{cut_layer}_{poisoning_rate}_{target_label}_{attack}_{trigger_size}_{attack_mode}.sh"
+#                                                 job_script_file_address = job_executer_files_path / Path(job_script_file)
 
-#                                     # Read the template and append the command to run the experiment
-#                                     with open(template_file_address, 'r') as template_file:
-#                                         template_content = template_file.read()
-                                    
-#                                     # write the content to the job script file
-#                                     with open(job_script_file_address, 'w') as job_script_file:
-#                                         job_script_file.write(template_content)
+#                                                 # Read the template and append the command to run the experiment
+#                                                 with open(template_file_address, 'r') as template_file:
+#                                                     template_content = template_file.read()
+                                                
+#                                                 # write the content to the job script file
+#                                                 with open(job_script_file_address, 'w') as job_script_file:
+#                                                     job_script_file.write(template_content)
 
-#                                     # create the command to run the experiment
-#                                     command = f"srun python utils.py --model {model} --dataset {dataset} --num_clients {num_clients} --num_rounds {num_rounds} --epochs_per_client {epochs_per_client} --batch_size {batch_size_list[0]} --cut_layer {cut_layer} --checkpoint_dir {checkpoint_dir} --poisoning_rate {poisoning_rate} --target_label {target_label} --exp_num {exp_num}"
+#                                                 # create the command to run the attack_only experiment
+#                                                 command = f"srun python attack_only.py --model {model} --dataset {dataset} --num_clients {num_clients} --num_rounds {num_rounds} --epochs_per_client {epochs_per_client} --batch_size {batch_size_list[0]} --cut_layer {cut_layer} --poisoning_rate {poisoning_rate} --target_label {target_label} --exp_num {exp_num} --attack {attack} --trigger_size {trigger_size} --attack_mode {attack_mode} --num_workers {num_workers}"
 
-#                                     # append the command to the job script file
-#                                     with open(job_script_file_address, 'a') as job_script_file:
-#                                         job_script_file.write("\n")  # Ensure there's a newline before adding the command
-#                                         job_script_file.write(command)
-                                        
-#                                     # Make the script executable
-#                                     subprocess.run(['chmod', '+x', str(job_script_file_address)])
-#                                     # Submit the job script to SLURM
-#                                     subprocess.run(['sbatch', str(job_script_file_address)])
-
-#######################################################################
-
-####################### Reduced Parameter Set Experiments ###############
-#######################################################################
+#                                                 # append the command to the job script file
+#                                                 with open(job_script_file_address, 'a') as job_script_file:
+#                                                     job_script_file.write("\n")  # Ensure there's a newline before adding the command
+#                                                     job_script_file.write(command)
+                                                    
+#                                                 # Make the script executable
+#                                                 subprocess.run(['chmod', '+x', str(job_script_file_address)])
+#                                                 # Submit the job script to SLURM
+#                                                 subprocess.run(['sbatch', str(job_script_file_address)])
 
 
+####################################################################################
 
 
 
-###########################################################################
-######################### attack only experiments #########################
-###########################################################################
+
+
+############################## step by step experiments ##############################
+####################################################################################
 
 for exp_num in exp_num_list:
     for dataset in dataset_list:
@@ -91,7 +97,7 @@ for exp_num in exp_num_list:
                                     for attack in attack_list:
                                         for trigger_size in trigger_size_list:
                                             for attack_mode in attack_mode_list:
-                                                job_script_file = f"attack_exp_{exp_num}_{dataset}_{model}_{num_clients}_{num_rounds}_{epochs_per_client}_{cut_layer}_{poisoning_rate}_{target_label}_{attack}_{trigger_size}_{attack_mode}.sh"
+                                                job_script_file = f"step_by_step_exp_{exp_num}_{dataset}_{model}_{num_clients}_{num_rounds}_{epochs_per_client}_{cut_layer}_{poisoning_rate}_{target_label}_{attack}_{trigger_size}_{attack_mode}.sh"
                                                 job_script_file_address = job_executer_files_path / Path(job_script_file)
 
                                                 # Read the template and append the command to run the experiment
@@ -102,8 +108,8 @@ for exp_num in exp_num_list:
                                                 with open(job_script_file_address, 'w') as job_script_file:
                                                     job_script_file.write(template_content)
 
-                                                # create the command to run the attack_only experiment
-                                                command = f"srun python attack_only.py --model {model} --dataset {dataset} --num_clients {num_clients} --num_rounds {num_rounds} --epochs_per_client {epochs_per_client} --batch_size {batch_size_list[0]} --cut_layer {cut_layer} --checkpoint_dir {checkpoint_dir} --poisoning_rate {poisoning_rate} --target_label {target_label} --exp_num {exp_num} --attack {attack} --trigger_size {trigger_size} --attack_mode {attack_mode}"
+                                                # create the command to run the step_by_step experiment
+                                                command = f"srun python step_by_step.py --model {model} --dataset {dataset} --num_clients {num_clients} --num_rounds {num_rounds} --epochs_per_client {epochs_per_client} --batch_size {batch_size_list[0]} --cut_layer {cut_layer} --poisoning_rate {poisoning_rate} --target_label {target_label} --exp_num {exp_num} --attack {attack} --trigger_size {trigger_size} --attack_mode {attack_mode} --num_workers {num_workers}"
 
                                                 # append the command to the job script file
                                                 with open(job_script_file_address, 'a') as job_script_file:
@@ -114,10 +120,4 @@ for exp_num in exp_num_list:
                                                 subprocess.run(['chmod', '+x', str(job_script_file_address)])
                                                 # Submit the job script to SLURM
                                                 subprocess.run(['sbatch', str(job_script_file_address)])
-
-
-
-
-
-
 
