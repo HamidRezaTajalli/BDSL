@@ -325,8 +325,10 @@ class Client:
                 # Server: Backward pass with gradient
                 # server.backward(backbone_output, tail_input.grad)
                 server.backward(backbone_output, gate_input_z1.grad)
-
-                head_grad = gate_input_z2.grad + backbone_input.grad
+                
+                head_grad = gate_input_z2.grad
+                if backbone_input.grad is not None:
+                    head_grad = head_grad + backbone_input.grad
                 
                 # Client: Complete backward pass
                 self.backward_pass(head_output, head_grad)
@@ -454,6 +456,9 @@ class Server:
     def __init__(self, model_name, num_classes=10, device='cpu', checkpoint_dir="./checkpoints", cut_layer=1):
         self.model_name = model_name
         self.device = device
+        self.freeze_backbone = False
+        self.frozen_rounds_remaining = 0
+        self.freeze_probability = 0.0
         if model_name == 'resnet18':
             self.backbone = ResNet18Backbone(cut_layer=cut_layer).to(device)
         elif model_name == 'resnet50':
@@ -491,6 +496,22 @@ class Server:
         # Checkpoint path
         self.backbone_checkpoint = os.path.join(checkpoint_dir, "server_backbone.pth")
     
+    def set_backbone_freeze(self, enable: bool, rounds: int = 0, probability: float = 0.0):
+        self.freeze_backbone = enable
+        self.frozen_rounds_remaining = rounds if enable else 0
+        self.freeze_probability = probability
+
+    def tick_round(self):
+        if self.frozen_rounds_remaining > 0:
+            self.frozen_rounds_remaining -= 1
+            if self.frozen_rounds_remaining == 0:
+                self.freeze_backbone = False
+        elif self.freeze_probability > 0.0:
+            if torch.rand(1).item() < self.freeze_probability:
+                self.freeze_backbone = True
+            else:
+                self.freeze_backbone = False
+
     def process(self, smashed_data):
         """Process the smashed data through the backbone"""
         self.backbone.train()  # Set to training mode
@@ -504,7 +525,8 @@ class Server:
             backbone_output.backward(tail_input_grad)
         else:
             raise Exception("Tail input gradient is None")
-        self.backbone_optimizer.step()
+        if not self.freeze_backbone:
+            self.backbone_optimizer.step()
     
     def save_model(self):
         """Save server model"""

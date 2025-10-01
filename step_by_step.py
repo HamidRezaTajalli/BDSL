@@ -55,6 +55,10 @@ def parse_args():
                       help='Trigger size for badnet attack (default: 0.08)')
     parser.add_argument('--attack_mode', type=str, default='all-to-one', choices=['all-to-all', 'all-to-one'],
                       help='Attack mode for wanet attack (default: all-to-one)')
+    parser.add_argument('--backbone_freeze_rounds', type=int, default=10,
+                      help='Number of initial rounds to freeze backbone updates (default: 10)')
+    parser.add_argument('--backbone_freeze_prob', type=float, default=0.0,
+                      help='Probability of freezing backbone on any given round (default: 0.0)')
     
 
     # WaNet-specific parameters
@@ -87,12 +91,18 @@ def parse_args():
 
 # Multi-client round-robin split learning system
 class RoundRobinSplitLearningSystem:
-    def __init__(self, server, clients, gated_fusion, checkpoint_dir="./checkpoints"):
+    def __init__(self, server, clients, gated_fusion, checkpoint_dir="./checkpoints", backbone_freeze_rounds=0, backbone_freeze_prob=0.0):
         self.server = server
         self.clients = clients
         self.gated_fusion = gated_fusion
         self.checkpoint_dir = checkpoint_dir
         os.makedirs(checkpoint_dir, exist_ok=True)
+        self.backbone_freeze_rounds = backbone_freeze_rounds
+        self.backbone_freeze_prob = backbone_freeze_prob
+        if self.backbone_freeze_rounds > 0:
+            self.server.set_backbone_freeze(True, self.backbone_freeze_rounds, self.backbone_freeze_prob)
+        else:
+            self.server.set_backbone_freeze(False, probability=self.backbone_freeze_prob)
     
     def train_round(self, epochs_per_client=1):
         """Train all clients in a round-robin fashion for one round"""
@@ -133,10 +143,14 @@ class RoundRobinSplitLearningSystem:
             print(f"Final Loss: {loss:.4f}, Accuracy: {accuracy:.2f}%")
         
         print("\n--- Round completed ---")
+        if self.backbone_freeze_rounds > 0 or self.backbone_freeze_prob > 0.0:
+            self.server.tick_round()
     
     def train_multiple_rounds(self, num_rounds=5, epochs_per_client=1):
         """Run multiple rounds of training"""
         for round_num in range(num_rounds):
+            if self.backbone_freeze_rounds > 0 and round_num >= self.backbone_freeze_rounds:
+                self.server.set_backbone_freeze(False, probability=self.backbone_freeze_prob)
             print(f"\n===== Starting Round {round_num+1}/{num_rounds} =====")
             self.train_round(epochs_per_client)
             print(f"===== Completed Round {round_num+1}/{num_rounds} =====\n")
@@ -276,7 +290,14 @@ if __name__ == "__main__":
         ))
     
     # Create round-robin split learning system
-    system = RoundRobinSplitLearningSystem(server, clients, gated_fusion, checkpoint_dir=args.checkpoint_dir)
+    system = RoundRobinSplitLearningSystem(
+        server,
+        clients,
+        gated_fusion,
+        checkpoint_dir=args.checkpoint_dir,
+        backbone_freeze_rounds=args.backbone_freeze_rounds,
+        backbone_freeze_prob=args.backbone_freeze_prob
+    )
     
     start_time = time.perf_counter()
 
