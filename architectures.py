@@ -18,12 +18,79 @@ from models.ViT_B16 import ViTB16Head, ViTB16Tail, ViTB16Backbone
 
 
 
+class HoneyPot(nn.Module):
+    """Module for projecting z2 (head output) to match z1 dimension"""
+    def __init__(self, model_name, cut_layer, z1_dim, z2_channels):
+        super().__init__()
+        self.model_name = model_name
+        
+        if model_name == 'vit_b16':
+            # For ViT, z2 is [B, seq_len, embed_dim], we'll use all tokens except CLS
+            # seq_len = 197 (196 patches + 1 CLS token)
+            self.z2_proj = nn.Sequential(
+                nn.Linear(z2_channels * 196, z1_dim * 2),  # 196 patch tokens
+                nn.ReLU(),
+                nn.Linear(z1_dim * 2, z1_dim)
+            )
+            self.pool_z2 = None
+        else:
+            # For CNN models, z2 is [B, C, H, W]
+            self.spatial_size = 2  # or try 2, 4, 7, depending on how much detail you want
+            self.pool_z2 = nn.AdaptiveAvgPool2d((self.spatial_size, self.spatial_size))  # [B, C, spatial_size, spatial_size]
+            self.z2_proj = nn.Sequential(
+                nn.Linear(z2_channels * self.spatial_size * self.spatial_size, z1_dim * 2),
+                nn.ReLU(),
+                nn.Linear(z1_dim * 2, z1_dim)
+            )
+    
+    def forward(self, z2):
+        if self.model_name == 'vit_b16':
+            # For ViT: z2 is [B, seq_len, embed_dim] where seq_len = 197
+            # Extract patch tokens (exclude CLS token at index 0)
+            patch_tokens = z2[:, 1:, :]  # [B, 196, 768]
+            z2_flat = patch_tokens.view(patch_tokens.size(0), -1)  # [B, 196*768]
+            z2_proj = self.z2_proj(z2_flat)  # [B, z1_dim]
+        else:
+            # For CNN models: z2 is [B, C, H, W]
+            z2_pooled = self.pool_z2(z2)  # [B, C, spatial_size, spatial_size]
+            # print(f"z2_pooled.shape: {z2_pooled.shape}")
+            z2_flat = z2_pooled.view(z2_pooled.size(0), -1)  # [B, C*spatial_size*spatial_size]
+            # print(f"z2_flat.shape: {z2_flat.shape}")
+            z2_proj = self.z2_proj(z2_flat)  # [B, z1_dim]
+            # print(f"z2_proj.shape: {z2_proj.shape}")
+        return z2_proj
+
+
+class Gate(nn.Module):
+    """Module for gating mechanism that fuses z1 and projected z2"""
+    def __init__(self, z1_dim):
+        super().__init__()
+        self.gate = nn.Sequential(
+            nn.Linear(z1_dim + z1_dim, z1_dim * 2),  # concat of z1 and projected z2
+            nn.SiLU(),
+            nn.Linear(z1_dim * 2, z1_dim),
+            nn.Sigmoid()
+        )
+    
+    def forward(self, z1, z2_proj):
+        z_cat = torch.cat([z1, z2_proj], dim=1)  # [B, z1_dim + z1_dim]
+        # print(f"z_cat.shape: {z_cat.shape}")
+        g = self.gate(z_cat)  # [B, z1_dim]
+        # print(f"g.shape: {g.shape}")  
+        fused = g * z1 + (1 - g) * z2_proj  # weighted fusion
+        # print(f"fused.shape: {fused.shape}")
+        return fused
+
+
 class GatedFusion(nn.Module):
-    def __init__(self, model_name, cut_layer, checkpoint_dir="./checkpoints"):
+    def __init__(self, model_name, cut_layer, checkpoint_dir="./checkpoints", 
+                 honey_pot_lr=None, gate_lr=None):
         super().__init__()
         
         self.model_name = model_name
+        self.cut_layer = cut_layer
 
+        # Determine z1_dim and z2_channels based on model and cut layer
         if model_name == 'resnet18':
             z1_dim = 512
             if cut_layer == 0:
@@ -91,84 +158,101 @@ class GatedFusion(nn.Module):
         else:
             raise Exception(f"Model {model_name} not supported")
 
-        if model_name == 'vit_b16':
-            # For ViT, z2 is [B, seq_len, embed_dim], we'll use all tokens except CLS
-            # seq_len = 197 (196 patches + 1 CLS token)
-            self.z2_proj = nn.Sequential(
-                nn.Linear(z2_channels * 196, z1_dim * 2),  # 196 patch tokens
-                nn.ReLU(),
-                nn.Linear(z1_dim * 2, z1_dim)
-            )
-        else:
-            # For CNN models, z2 is [B, C, H, W]
-            self.spatial_size = 2  # or try 2, 4, 7, depending on how much detail you want
-            self.pool_z2 = nn.AdaptiveAvgPool2d((self.spatial_size, self.spatial_size))  # [B, C, 4, 4]
-            self.z2_proj = nn.Sequential(
-                nn.Linear(z2_channels * self.spatial_size * self.spatial_size, z1_dim * 2),
-                nn.ReLU(),
-                nn.Linear(z1_dim * 2, z1_dim)
-            )
-        self.gate = nn.Sequential(
-            nn.Linear(z1_dim + z1_dim, z1_dim * 2),  # concat of z1 and projected z2
-            nn.SiLU(),
-            nn.Linear(z1_dim * 2, z1_dim),
-            nn.Sigmoid()
-        )
+        # Create HoneyPot and Gate modules
+        self.honey_pot = HoneyPot(model_name, cut_layer, z1_dim, z2_channels)
+        self.gate = Gate(z1_dim)
 
-        # Model-specific optimizers for gated fusion
-        if model_name in ['resnet18', 'resnet50', 'densenet121']:
-            # Adam for ResNet and DenseNet
-            self.optimizer = optim.Adam(self.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
-        elif model_name == 'vit_b16':
-            # AdamW for Vision Transformer
-            self.optimizer = optim.AdamW(self.parameters(), lr=3e-4, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.05)
-        elif model_name in ['vgg11', 'vgg19']:
-            # SGD with momentum for VGG models
-            self.optimizer = optim.Adam(self.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
+        # Set default learning rates based on model if not provided
+        if honey_pot_lr is None or gate_lr is None:
+            if model_name in ['resnet18', 'resnet50', 'densenet121']:
+                default_lr = 0.001
+                default_optimizer_class = optim.Adam
+                default_kwargs = {'betas': (0.9, 0.999), 'eps': 1e-08, 'weight_decay': 1e-4}
+            elif model_name == 'vit_b16':
+                default_lr = 3e-4
+                default_optimizer_class = optim.AdamW
+                default_kwargs = {'betas': (0.9, 0.999), 'eps': 1e-08, 'weight_decay': 0.05}
+            elif model_name in ['vgg11', 'vgg19']:
+                default_lr = 0.001
+                default_optimizer_class = optim.Adam
+                default_kwargs = {'betas': (0.9, 0.999), 'eps': 1e-08, 'weight_decay': 1e-4}
+            else:
+                default_lr = 0.001
+                default_optimizer_class = optim.Adam
+                default_kwargs = {'betas': (0.9, 0.999), 'eps': 1e-08, 'weight_decay': 1e-4}
+            
+            if honey_pot_lr is None:
+                honey_pot_lr = default_lr
+            if gate_lr is None:
+                gate_lr = default_lr
         else:
-            # Default to Adam for unknown models
-            self.optimizer = optim.Adam(self.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
+            # Use Adam as default if custom learning rates are provided
+            default_optimizer_class = optim.Adam
+            default_kwargs = {'betas': (0.9, 0.999), 'eps': 1e-08, 'weight_decay': 1e-4}
+
+        # Create separate optimizers for HoneyPot and Gate
+        if model_name == 'vit_b16':
+            self.honey_pot_optimizer = optim.AdamW(self.honey_pot.parameters(), lr=honey_pot_lr, 
+                                                   betas=(0.9, 0.999), eps=1e-08, weight_decay=0.05)
+            self.gate_optimizer = optim.AdamW(self.gate.parameters(), lr=gate_lr, 
+                                             betas=(0.9, 0.999), eps=1e-08, weight_decay=0.05)
+        else:
+            self.honey_pot_optimizer = default_optimizer_class(self.honey_pot.parameters(), 
+                                                               lr=honey_pot_lr, **default_kwargs)
+            self.gate_optimizer = default_optimizer_class(self.gate.parameters(), 
+                                                         lr=gate_lr, **default_kwargs)
 
         self.checkpoint_dir = checkpoint_dir
         os.makedirs(checkpoint_dir, exist_ok=True)
-        self.checkpoint_path = os.path.join(checkpoint_dir, "gated_fusion.pth")
+        self.honey_pot_checkpoint = os.path.join(checkpoint_dir, "honey_pot.pth")
+        self.gate_checkpoint = os.path.join(checkpoint_dir, "gate.pth")
 
 
 
     def forward(self, z1, z2):
-        if self.model_name == 'vit_b16':
-            # For ViT: z2 is [B, seq_len, embed_dim] where seq_len = 197
-            # Extract patch tokens (exclude CLS token at index 0)
-            patch_tokens = z2[:, 1:, :]  # [B, 196, 768]
-            z2_flat = patch_tokens.view(patch_tokens.size(0), -1)  # [B, 196*768]
-            z2_proj = self.z2_proj(z2_flat)  # [B, z1_dim]
-        else:
-            # For CNN models: z2 is [B, C, H, W]
-            z2_pooled = self.pool_z2(z2)  # [B, C, 4, 4]
-            # print(f"z2_pooled.shape: {z2_pooled.shape}")
-            z2_flat = z2_pooled.view(z2_pooled.size(0), -1)  # [B, C*4*4]
-            # print(f"z2_flat.shape: {z2_flat.shape}")
-            z2_proj = self.z2_proj(z2_flat)  # [B, z1_dim]
-            # print(f"z2_proj.shape: {z2_proj.shape}")
-        z_cat = torch.cat([z1, z2_proj], dim=1)  # [B, z1_dim + z1_dim]
-        # print(f"z_cat.shape: {z_cat.shape}")
-        g = self.gate(z_cat)  # [B, z1_dim]
-        #   print(f"g.shape: {g.shape}")
-        fused = g * z1 + (1 - g) * z2_proj  # weighted fusion
+        # HoneyPot: Project z2 to match z1 dimension
+        z2_proj = self.honey_pot(z2)  # [B, z1_dim]
+        
+        # Gate: Fuse z1 and z2_proj
+        fused = self.gate(z1, z2_proj)  # [B, z1_dim]
+        
         return fused  # [B, z1_dim]
 
 
 
     def save_model(self):
-        torch.save(self.state_dict(), self.checkpoint_path)
-        print(f"GatedFusion saved to {self.checkpoint_path}")
+        """Save both HoneyPot and Gate modules"""
+        torch.save(self.honey_pot.state_dict(), self.honey_pot_checkpoint)
+        torch.save(self.gate.state_dict(), self.gate_checkpoint)
+        print(f"HoneyPot saved to {self.honey_pot_checkpoint}")
+        print(f"Gate saved to {self.gate_checkpoint}")
     
     def load_model(self):
-        if os.path.exists(self.checkpoint_path):
-            self.load_state_dict(torch.load(self.checkpoint_path))
-            print(f"GatedFusion loaded from {self.checkpoint_path}")
-            return True
-        return False
+        """Load both HoneyPot and Gate modules"""
+        loaded = False
+        if os.path.exists(self.honey_pot_checkpoint):
+            self.honey_pot.load_state_dict(torch.load(self.honey_pot_checkpoint))
+            print(f"HoneyPot loaded from {self.honey_pot_checkpoint}")
+            loaded = True
+        else:
+            loaded = False
+        if os.path.exists(self.gate_checkpoint):
+            self.gate.load_state_dict(torch.load(self.gate_checkpoint))
+            print(f"Gate loaded from {self.gate_checkpoint}")
+            loaded = True
+        else:
+            loaded = False
+        return loaded
+    
+    def zero_grad(self):
+        """Zero gradients for both optimizers"""
+        self.honey_pot_optimizer.zero_grad()
+        self.gate_optimizer.zero_grad()
+    
+    def step(self):
+        """Step both optimizers"""
+        self.honey_pot_optimizer.step()
+        self.gate_optimizer.step()
 
 
 
@@ -315,10 +399,10 @@ class Client:
                 self.tail_optimizer.step()
 
 
-                # Gated Fusion: Backward pass
-                gated_fusion.optimizer.zero_grad()
+                # Gated Fusion: Backward pass (both HoneyPot and Gate)
+                gated_fusion.zero_grad()
                 gate_output.backward(tail_input.grad)
-                gated_fusion.optimizer.step()
+                gated_fusion.step()
 
                 
                 
