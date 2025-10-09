@@ -541,8 +541,6 @@ class Server:
         self.model_name = model_name
         self.device = device
         self.freeze_backbone = False
-        self.frozen_rounds_remaining = 0
-        self.freeze_probability = 0.0
         if model_name == 'resnet18':
             self.backbone = ResNet18Backbone(cut_layer=cut_layer).to(device)
         elif model_name == 'resnet50':
@@ -580,21 +578,11 @@ class Server:
         # Checkpoint path
         self.backbone_checkpoint = os.path.join(checkpoint_dir, "server_backbone.pth")
     
-    def set_backbone_freeze(self, enable: bool, rounds: int = 0, probability: float = 0.0):
+    def set_backbone_freeze(self, enable: bool):
+        """Enable or disable backbone freezing"""
         self.freeze_backbone = enable
-        self.frozen_rounds_remaining = rounds if enable else 0
-        self.freeze_probability = probability
-
-    def tick_round(self):
-        if self.frozen_rounds_remaining > 0:
-            self.frozen_rounds_remaining -= 1
-            if self.frozen_rounds_remaining == 0:
-                self.freeze_backbone = False
-        elif self.freeze_probability > 0.0:
-            if torch.rand(1).item() < self.freeze_probability:
-                self.freeze_backbone = True
-            else:
-                self.freeze_backbone = False
+        status = "FROZEN" if enable else "ACTIVE"
+        print(f"Server backbone is now: {status}")
 
     def process(self, smashed_data):
         """Process the smashed data through the backbone"""

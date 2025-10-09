@@ -18,13 +18,13 @@ num_rounds_list = [60]
 epochs_per_client_list = [1]
 batch_size_list = [128]
 cut_layer_list = [1]
-poisoning_rate_list = [0.2]
+poisoning_rate_list = [0.1]
 target_label_list = [0]
 num_workers = 14
 
 # Additional parameter lists for attack_only.py
 attack_list = ["badnet", "blend", "sig"]
-attack_list = ["blend"]
+attack_list = ["badnet"]
 trigger_size_list = [0.08]
 attack_mode_list = ["all-to-one"]
 
@@ -109,7 +109,7 @@ for exp_num in exp_num_list:
                                                     job_script_file.write(template_content)
 
                                                 # create the command to run the step_by_step experiment
-                                                command = f"srun python step_by_step.py --model {model} --dataset {dataset} --num_clients {num_clients} --num_rounds {num_rounds} --epochs_per_client {epochs_per_client} --batch_size {batch_size_list[0]} --cut_layer {cut_layer} --poisoning_rate {poisoning_rate} --target_label {target_label} --exp_num {exp_num} --attack {attack} --trigger_size {trigger_size} --attack_mode {attack_mode} --num_workers {num_workers} --backbone_freeze_rounds 0 --backbone_freeze_prob 0.34"
+                                                command = f"srun python step_by_step.py --model {model} --dataset {dataset} --num_clients {num_clients} --num_rounds {num_rounds} --epochs_per_client {epochs_per_client} --batch_size {batch_size_list[0]} --cut_layer {cut_layer} --poisoning_rate {poisoning_rate} --target_label {target_label} --exp_num {exp_num} --attack {attack} --trigger_size {trigger_size} --attack_mode {attack_mode} --num_workers {num_workers} --backbone_freeze_rounds 10"
 
                                                 # append the command to the job script file
                                                 with open(job_script_file_address, 'a') as job_script_file:
