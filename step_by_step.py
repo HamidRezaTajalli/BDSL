@@ -55,6 +55,8 @@ def parse_args():
                       help='Trigger size for badnet attack (default: 0.08)')
     parser.add_argument('--attack_mode', type=str, default='all-to-one', choices=['all-to-all', 'all-to-one'],
                       help='Attack mode for wanet attack (default: all-to-one)')
+    parser.add_argument('--backbone_freeze_rounds', type=int, default=10,
+                      help='Number of consecutive rounds to freeze backbone updates at a random starting point (default: 10)')
     
 
     # WaNet-specific parameters
@@ -87,12 +89,36 @@ def parse_args():
 
 # Multi-client round-robin split learning system
 class RoundRobinSplitLearningSystem:
-    def __init__(self, server, clients, gated_fusion, checkpoint_dir="./checkpoints"):
+    def __init__(self, server, clients, gated_fusion, checkpoint_dir="./checkpoints", backbone_freeze_rounds=0, num_rounds=100):
         self.server = server
         self.clients = clients
         self.gated_fusion = gated_fusion
         self.checkpoint_dir = checkpoint_dir
         os.makedirs(checkpoint_dir, exist_ok=True)
+        self.backbone_freeze_rounds = backbone_freeze_rounds
+        self.num_rounds = num_rounds
+        
+        # Calculate random freeze start and end rounds
+        if self.backbone_freeze_rounds > 0 and self.num_rounds > self.backbone_freeze_rounds:
+            # Draw a random starting round between 0 and (num_rounds - freeze_rounds)
+            self.freeze_start_round = random.randint(0, self.num_rounds - self.backbone_freeze_rounds)
+            self.freeze_end_round = self.freeze_start_round + self.backbone_freeze_rounds
+            print(f"\n*** Backbone Freeze Schedule ***")
+            print(f"Total rounds: {self.num_rounds}")
+            print(f"Freeze duration: {self.backbone_freeze_rounds} rounds")
+            print(f"Freeze will be active from round {self.freeze_start_round} to round {self.freeze_end_round - 1} (inclusive)")
+            print(f"********************************\n")
+        else:
+            self.freeze_start_round = -1  # Disabled
+            self.freeze_end_round = -1
+            if self.backbone_freeze_rounds > 0:
+                print(f"Warning: backbone_freeze_rounds ({self.backbone_freeze_rounds}) >= num_rounds ({self.num_rounds}). Freezing disabled.")
+
+            if self.backbone_freeze_rounds > 0 and self.num_rounds <= self.backbone_freeze_rounds:
+                raise Exception(f"Backbone freeze rounds ({self.backbone_freeze_rounds}) >= num_rounds ({self.num_rounds}). Freezing disabled.")
+        
+        # Initially set backbone freeze to False (will be enabled when reaching freeze_start_round)
+        self.server.set_backbone_freeze(False)
     
     def train_round(self, epochs_per_client=1):
         """Train all clients in a round-robin fashion for one round"""
@@ -137,7 +163,21 @@ class RoundRobinSplitLearningSystem:
     def train_multiple_rounds(self, num_rounds=5, epochs_per_client=1):
         """Run multiple rounds of training"""
         for round_num in range(num_rounds):
+            # Check if we should enable/disable backbone freezing based on current round
+            if self.freeze_start_round >= 0:  # Freezing is configured
+                if round_num == self.freeze_start_round:
+                    # Start freezing
+                    print(f"\n>>> ENABLING Backbone Freeze (Round {round_num}) <<<")
+                    self.server.set_backbone_freeze(True)
+                elif round_num == self.freeze_end_round:
+                    # Stop freezing
+                    print(f"\n>>> DISABLING Backbone Freeze (Round {round_num}) <<<")
+                    self.server.set_backbone_freeze(False)
+            
             print(f"\n===== Starting Round {round_num+1}/{num_rounds} =====")
+            # Show freeze status
+            freeze_status = "FROZEN" if self.server.freeze_backbone else "ACTIVE"
+            print(f"Backbone Status: {freeze_status}")
             self.train_round(epochs_per_client)
             print(f"===== Completed Round {round_num+1}/{num_rounds} =====\n")
 
@@ -276,7 +316,14 @@ if __name__ == "__main__":
         ))
     
     # Create round-robin split learning system
-    system = RoundRobinSplitLearningSystem(server, clients, gated_fusion, checkpoint_dir=args.checkpoint_dir)
+    system = RoundRobinSplitLearningSystem(
+        server,
+        clients,
+        gated_fusion,
+        checkpoint_dir=args.checkpoint_dir,
+        backbone_freeze_rounds=args.backbone_freeze_rounds,
+        num_rounds=args.num_rounds
+    )
     
     start_time = time.perf_counter()
 
