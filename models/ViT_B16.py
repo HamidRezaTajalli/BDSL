@@ -121,4 +121,162 @@ class ViTB16Tail(nn.Module):
         torch.save(self.state_dict(), path)
     
     def load_state_dict_from_path(self, path):
-        self.load_state_dict(torch.load(path)) 
+        self.load_state_dict(torch.load(path))
+
+
+class ViTB16Decoder(nn.Module):
+    """Decoder for ViT-B/16 to reconstruct images from backbone output"""
+    def __init__(self, cut_layer, input_size=(224, 224)):
+        super(ViTB16Decoder, self).__init__()
+        self.cut_layer = cut_layer
+        self.input_size = input_size
+        
+        # For ViT-B/16, the input is [B, 197, 768] (seq_len=197, embed_dim=768)
+        # We need to convert this to 224x224 RGB images
+        
+        # First, we reshape the sequence to a spatial representation
+        # 197 tokens = 1 CLS token + 196 patch tokens (14x14 patches)
+        # We'll use the 196 patch tokens and reshape to [B, 768, 14, 14]
+        
+        self.patch_to_spatial = nn.Sequential(
+            # Input: [B, 196*768] -> [B, 768, 14, 14]
+            nn.Linear(196 * 768, 768 * 14 * 14),
+            nn.ReLU()
+        )
+        
+        # Then use transposed convolutions to upsample to 224x224
+        if cut_layer == 0:
+            # Early cut: more upsampling needed
+            self.decoder = nn.Sequential(
+                # Start from [B, 768, 14, 14]
+                nn.ConvTranspose2d(768, 512, kernel_size=4, stride=2, padding=1),  # [B, 512, 28, 28]
+                nn.BatchNorm2d(512),
+                nn.ReLU(inplace=True),
+                
+                nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1),  # [B, 256, 56, 56]
+                nn.BatchNorm2d(256),
+                nn.ReLU(inplace=True),
+                
+                nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),  # [B, 128, 112, 112]
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+                
+                nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # [B, 64, 224, 224]
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                
+                nn.Conv2d(64, 3, kernel_size=3, padding=1),  # [B, 3, 224, 224]
+                nn.Tanh()
+            )
+        elif cut_layer == 1:
+            # Second cut
+            self.decoder = nn.Sequential(
+                nn.ConvTranspose2d(768, 512, kernel_size=4, stride=2, padding=1),  # [B, 512, 28, 28]
+                nn.BatchNorm2d(512),
+                nn.ReLU(inplace=True),
+                
+                nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1),  # [B, 256, 56, 56]
+                nn.BatchNorm2d(256),
+                nn.ReLU(inplace=True),
+                
+                nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),  # [B, 128, 112, 112]
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+                
+                nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # [B, 64, 224, 224]
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                
+                nn.Conv2d(64, 3, kernel_size=3, padding=1),  # [B, 3, 224, 224]
+                nn.Tanh()
+            )
+        elif cut_layer == 2:
+            # Third cut
+            self.decoder = nn.Sequential(
+                nn.ConvTranspose2d(768, 512, kernel_size=4, stride=2, padding=1),  # [B, 512, 28, 28]
+                nn.BatchNorm2d(512),
+                nn.ReLU(inplace=True),
+                
+                nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1),  # [B, 256, 56, 56]
+                nn.BatchNorm2d(256),
+                nn.ReLU(inplace=True),
+                
+                nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),  # [B, 128, 112, 112]
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+                
+                nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # [B, 64, 224, 224]
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                
+                nn.Conv2d(64, 3, kernel_size=3, padding=1),  # [B, 3, 224, 224]
+                nn.Tanh()
+            )
+        elif cut_layer == 3:
+            # Fourth cut
+            self.decoder = nn.Sequential(
+                nn.ConvTranspose2d(768, 512, kernel_size=4, stride=2, padding=1),  # [B, 512, 28, 28]
+                nn.BatchNorm2d(512),
+                nn.ReLU(inplace=True),
+                
+                nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1),  # [B, 256, 56, 56]
+                nn.BatchNorm2d(256),
+                nn.ReLU(inplace=True),
+                
+                nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),  # [B, 128, 112, 112]
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+                
+                nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # [B, 64, 224, 224]
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                
+                nn.Conv2d(64, 3, kernel_size=3, padding=1),  # [B, 3, 224, 224]
+                nn.Tanh()
+            )
+        elif cut_layer == 4:
+            # Fifth cut
+            self.decoder = nn.Sequential(
+                nn.ConvTranspose2d(768, 512, kernel_size=4, stride=2, padding=1),  # [B, 512, 28, 28]
+                nn.BatchNorm2d(512),
+                nn.ReLU(inplace=True),
+                
+                nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1),  # [B, 256, 56, 56]
+                nn.BatchNorm2d(256),
+                nn.ReLU(inplace=True),
+                
+                nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),  # [B, 128, 112, 112]
+                nn.BatchNorm2d(128),
+                nn.ReLU(inplace=True),
+                
+                nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # [B, 64, 224, 224]
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                
+                nn.Conv2d(64, 3, kernel_size=3, padding=1),  # [B, 3, 224, 224]
+                nn.Tanh()
+            )
+        else:
+            raise Exception(f"Cut layer {cut_layer} not supported for ViT-B/16")
+    
+    def forward(self, backbone_output):
+        """Forward pass through decoder
+        For ViT-B/16: backbone_output is [B, 197, 768]
+        """
+        # Extract patch tokens (exclude CLS token at index 0)
+        patch_tokens = backbone_output[:, 1:, :]  # [B, 196, 768]
+        
+        # Flatten patch tokens
+        patch_flat = patch_tokens.view(patch_tokens.size(0), -1)  # [B, 196*768]
+        
+        # Convert to spatial representation
+        spatial_features = self.patch_to_spatial(patch_flat)  # [B, 768*14*14]
+        spatial_features = spatial_features.view(spatial_features.size(0), 768, 14, 14)  # [B, 768, 14, 14]
+        
+        # Pass through decoder
+        reconstructed = self.decoder(spatial_features)
+        
+        # Convert from [-1, 1] to [0, 1]
+        reconstructed = (reconstructed + 1) / 2
+        
+        return reconstructed 
