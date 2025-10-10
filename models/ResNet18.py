@@ -116,129 +116,83 @@ class ResNet18Tail(nn.Module):
 
 
 class ResNet18Decoder(nn.Module):
-    """Decoder for ResNet18 to reconstruct images from backbone output"""
+    """Decoder for ResNet18 to reconstruct images from backbone output
+    
+    Note: Backbone outputs flattened features [B, 512] after avgpool + flatten.
+    The decoder first reshapes this to [B, 512, 7, 7] then upsamples to [B, 3, 224, 224].
+    """
     def __init__(self, cut_layer, input_size=(224, 224)):
         super(ResNet18Decoder, self).__init__()
         self.cut_layer = cut_layer
         self.input_size = input_size
         
-        # Build decoder architecture based on cut layer
-        if cut_layer == 0:
-            # Cut after first conv layer: expect [B, 64, 112, 112]
-            self.decoder = nn.Sequential(
-                # Upsample to 224x224
-                nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),  # [B, 32, 224, 224]
-                nn.BatchNorm2d(32),
-                nn.ReLU(inplace=True),
-                
-                # Final layer to RGB
-                nn.Conv2d(32, 3, kernel_size=3, padding=1),  # [B, 3, 224, 224]
-                nn.Tanh()  # Output in [-1, 1] range
-            )
-        elif cut_layer == 1:
-            # Cut after layer1: expect [B, 64, 56, 56]
-            self.decoder = nn.Sequential(
-                # Upsample to 112x112
-                nn.ConvTranspose2d(64, 64, kernel_size=4, stride=2, padding=1),  # [B, 64, 112, 112]
-                nn.BatchNorm2d(64),
-                nn.ReLU(inplace=True),
-                
-                # Upsample to 224x224
-                nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),  # [B, 32, 224, 224]
-                nn.BatchNorm2d(32),
-                nn.ReLU(inplace=True),
-                
-                # Final layer to RGB
-                nn.Conv2d(32, 3, kernel_size=3, padding=1),  # [B, 3, 224, 224]
-                nn.Tanh()
-            )
-        elif cut_layer == 2:
-            # Cut after layer2: expect [B, 128, 28, 28]
-            self.decoder = nn.Sequential(
-                # Upsample to 56x56
-                nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # [B, 64, 56, 56]
-                nn.BatchNorm2d(64),
-                nn.ReLU(inplace=True),
-                
-                # Upsample to 112x112
-                nn.ConvTranspose2d(64, 64, kernel_size=4, stride=2, padding=1),  # [B, 64, 112, 112]
-                nn.BatchNorm2d(64),
-                nn.ReLU(inplace=True),
-                
-                # Upsample to 224x224
-                nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),  # [B, 32, 224, 224]
-                nn.BatchNorm2d(32),
-                nn.ReLU(inplace=True),
-                
-                # Final layer to RGB
-                nn.Conv2d(32, 3, kernel_size=3, padding=1),  # [B, 3, 224, 224]
-                nn.Tanh()
-            )
-        elif cut_layer == 3:
-            # Cut after layer3: expect [B, 256, 14, 14]
-            self.decoder = nn.Sequential(
-                # Upsample to 28x28
-                nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),  # [B, 128, 28, 28]
-                nn.BatchNorm2d(128),
-                nn.ReLU(inplace=True),
-                
-                # Upsample to 56x56
-                nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # [B, 64, 56, 56]
-                nn.BatchNorm2d(64),
-                nn.ReLU(inplace=True),
-                
-                # Upsample to 112x112
-                nn.ConvTranspose2d(64, 64, kernel_size=4, stride=2, padding=1),  # [B, 64, 112, 112]
-                nn.BatchNorm2d(64),
-                nn.ReLU(inplace=True),
-                
-                # Upsample to 224x224
-                nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),  # [B, 32, 224, 224]
-                nn.BatchNorm2d(32),
-                nn.ReLU(inplace=True),
-                
-                # Final layer to RGB
-                nn.Conv2d(32, 3, kernel_size=3, padding=1),  # [B, 3, 224, 224]
-                nn.Tanh()
-            )
-        elif cut_layer == 4:
-            # Cut after layer4: expect [B, 512, 7, 7]
-            self.decoder = nn.Sequential(
-                # Upsample to 14x14
-                nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1),  # [B, 256, 14, 14]
-                nn.BatchNorm2d(256),
-                nn.ReLU(inplace=True),
-                
-                # Upsample to 28x28
-                nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),  # [B, 128, 28, 28]
-                nn.BatchNorm2d(128),
-                nn.ReLU(inplace=True),
-                
-                # Upsample to 56x56
-                nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # [B, 64, 56, 56]
-                nn.BatchNorm2d(64),
-                nn.ReLU(inplace=True),
-                
-                # Upsample to 112x112
-                nn.ConvTranspose2d(64, 64, kernel_size=4, stride=2, padding=1),  # [B, 64, 112, 112]
-                nn.BatchNorm2d(64),
-                nn.ReLU(inplace=True),
-                
-                # Upsample to 224x224
-                nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),  # [B, 32, 224, 224]
-                nn.BatchNorm2d(32),
-                nn.ReLU(inplace=True),
-                
-                # Final layer to RGB
-                nn.Conv2d(32, 3, kernel_size=3, padding=1),  # [B, 3, 224, 224]
-                nn.Tanh()
-            )
-        else:
-            raise Exception(f"Cut layer {cut_layer} not supported for ResNet18")
+        # ResNet18 backbone always outputs [B, 512] after avgpool + flatten
+        # Strategy: Linear projection to expand features, then reshape and upsample
+        self.initial_size = 7  # Target spatial size after reshape
+        self.initial_channels = 512
+        
+        # Project flattened features to spatial representation
+        # [B, 512] -> [B, 512*7*7]
+        self.fc_projection = nn.Sequential(
+            nn.Linear(512, 512 * self.initial_size * self.initial_size),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Build decoder architecture - same for all cut layers since backbone output is always [B, 512]
+        # Input: [B, 512, 7, 7] after projection & reshape -> Upsample to [B, 3, 224, 224]
+        self.decoder = nn.Sequential(
+            # Start from [B, 512, 7, 7]
+            # Upsample to 14x14
+            nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1),  # [B, 256, 14, 14]
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            
+            # Upsample to 28x28
+            nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),  # [B, 128, 28, 28]
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            
+            # Upsample to 56x56
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # [B, 64, 56, 56]
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            
+            # Upsample to 112x112
+            nn.ConvTranspose2d(64, 64, kernel_size=4, stride=2, padding=1),  # [B, 64, 112, 112]
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            
+            # Upsample to 224x224
+            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),  # [B, 32, 224, 224]
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            
+            # Final layer to RGB
+            nn.Conv2d(32, 3, kernel_size=3, padding=1),  # [B, 3, 224, 224]
+            nn.Tanh()
+        )
     
     def forward(self, backbone_output):
-        """Forward pass through decoder - backbone_output is [B, C, H, W]"""
-        reconstructed = self.decoder(backbone_output)
+        """Forward pass through decoder
+        
+        Args:
+            backbone_output: Flattened features from backbone [B, 512]
+            
+        Returns:
+            reconstructed: Reconstructed image [B, 3, 224, 224] in range [0, 1]
+        """
+        batch_size = backbone_output.size(0)
+        
+        # Project from [B, 512] to [B, 512*7*7]
+        projected = self.fc_projection(backbone_output)
+        
+        # Reshape to [B, 512, 7, 7]
+        spatial_features = projected.view(batch_size, self.initial_channels, 
+                                         self.initial_size, self.initial_size)
+        
+        # Pass through decoder
+        reconstructed = self.decoder(spatial_features)
+        
         # Convert from [-1, 1] to [0, 1]
         reconstructed = (reconstructed + 1) / 2
         return reconstructed
