@@ -256,7 +256,7 @@ if __name__ == "__main__":
 
     suffix = f"_{args.exp_num}_{args.model}_{args.dataset}_{args.cut_layer}_{args.num_clients}_{args.num_rounds}_{args.epochs_per_client}_{args.poisoning_rate}_{args.target_label}_{args.attack}_{args.trigger_size}_{args.attack_mode}"
 
-    checkpoint_dir = checkpoint_dir / suffix / f"{time.perf_counter()}"
+    checkpoint_dir = checkpoint_dir / suffix / f"{time.time()}"
     if not checkpoint_dir.exists():
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
     args.checkpoint_dir = checkpoint_dir
