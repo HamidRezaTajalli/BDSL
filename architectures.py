@@ -535,6 +535,165 @@ class Client:
                 return True
         return False
 
+
+
+
+class Surrogate_Head:
+    def __init__(self, args, model_name, dataset, batch_size=32, num_classes=10, device='cpu', 
+                 checkpoint_dir="./checkpoints", cut_layer=1):
+        self.device = device
+        self.args = args
+        self.dataset = dataset
+        self.dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=self.args.num_workers)
+        
+        if model_name == 'resnet18':
+            self.head = ResNet18Head(in_channels=3, cut_layer=cut_layer).to(device)
+        elif model_name == 'resnet50':
+            self.head = ResNet50Head(in_channels=3, cut_layer=cut_layer).to(device)
+        elif model_name == 'vgg11':
+            self.head = VGG11Head(in_channels=3, cut_layer=cut_layer).to(device)
+        elif model_name == 'vgg19':
+            self.head = VGG19Head(in_channels=3, cut_layer=cut_layer).to(device)
+        elif model_name == 'densenet121':
+            self.head = DenseNet121Head(in_channels=3, cut_layer=cut_layer).to(device)
+        elif model_name == 'vit_b16':
+            self.head = ViTB16Head(in_channels=3, cut_layer=cut_layer).to(device)
+        else:
+            raise Exception(f"Model {model_name} not supported")
+        
+        self.criterion = nn.CrossEntropyLoss()
+        
+        # Model-specific optimizers
+        if model_name in ['resnet18', 'resnet50', 'densenet121']:
+            # Adam for ResNet and DenseNet
+            self.head_optimizer = optim.Adam(self.head.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
+        elif model_name == 'vit_b16':
+            # AdamW for Vision Transformer
+            self.head_optimizer = optim.AdamW(self.head.parameters(), lr=3e-4, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.05)
+        elif model_name in ['vgg11', 'vgg19']:
+            # SGD with momentum for VGG models
+            self.head_optimizer = optim.SGD(self.head.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
+        else:
+            # Default to Adam for unknown models
+            self.head_optimizer = optim.Adam(self.head.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
+        
+        # Checkpoint directory
+        self.checkpoint_dir = checkpoint_dir
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        # Checkpoint paths
+        self.head_checkpoint = os.path.join(checkpoint_dir, f"surrogate_head.pth")
+    
+    def forward_pass(self, inputs):
+        """Forward pass through the surrogate head model"""
+        self.head.eval()  # Set to evaluation mode for forward pass
+        with torch.no_grad():
+            smashed_data = self.head(inputs)
+        return smashed_data
+    
+    def backward_pass(self, head_output, backbone_input_grad):
+        """Backward pass to update the client's head and tail models"""
+        self.head_optimizer.zero_grad()
+        if backbone_input_grad is not None:
+            head_output.backward(backbone_input_grad)
+        else:
+            raise Exception("Backbone input gradient is None")
+        self.head_optimizer.step()
+        
+
+    def save_model(self):
+        """Save surrogate head model"""
+        self.head.save_state_dict(self.head_checkpoint)
+        print(f"Surrogate head saved to {self.checkpoint_dir}")
+    
+    def load_model(self, head_checkpoint=None):
+        """Load models from previous client or initialize if first client"""
+        if head_checkpoint is not None:
+            load_path = head_checkpoint
+        else:
+            load_path = self.head_checkpoint
+            
+        if os.path.exists(load_path):
+            self.head.load_state_dict_from_path(load_path)
+            print(f"Surrogate head loaded from {load_path}")
+            return True
+        else:
+            return False
+
+    def train_step(self, server, decoder, epochs=1):
+        """Complete training step with the server and decoder for reconstruction"""
+        running_loss = 0.0
+        
+        self.head.train()  # Set head to training mode
+        
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            
+            for inputs, labels in self.dataloader:
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
+
+                # print(f"inputs.shape: {inputs.shape}")
+                # print(f"labels.shape: {labels.shape}")
+                # print(f"inputs.dtype: {inputs.dtype}")
+                # print(f"labels.dtype: {labels.dtype}")
+                
+                # Client: Head forward pass
+                head_output = self.head(inputs)
+                # print(f"head_output.shape: {head_output.shape}")
+
+                backbone_input = head_output.detach().clone().requires_grad_(True)
+                # print(f"backbone_input.shape: {backbone_input.shape}")
+
+                
+                # Server: Process through backbone
+                backbone_output = server.process(backbone_input)                
+                # print(f"backbone_output.shape: {backbone_output.shape}")
+
+                decoder_input = backbone_output.detach().clone().requires_grad_(True)
+                # print(f"decoder_input.shape: {decoder_input.shape}")
+
+                decoder_output = decoder(decoder_input)
+                # print(f"decoder_output.shape: {decoder_output.shape}")
+            
+                
+                # compute decoder loss
+                loss, mse_loss, tv_loss = decoder.compute_reconstruction_loss(decoder_output, inputs)
+
+                decoder.optimizer.zero_grad()
+                loss.backward()
+                decoder.optimizer.step()
+
+                
+                
+                # Server: Backward pass with gradient
+                server.backward(backbone_output, decoder_input.grad)
+                
+                
+                # Surrogate Head: Complete backward pass
+                self.backward_pass(head_output, backbone_input.grad)
+                
+                # Statistics
+                epoch_loss += loss.item()
+   
+            
+            # Calculate epoch statistics
+            avg_loss = epoch_loss / len(self.dataloader)
+            
+            print(f"Surrogate Head, Epoch {epoch+1}/{epochs}, "
+                  f"Reconstruction Loss: {avg_loss:.4f}")
+            
+            running_loss += avg_loss
+        
+        # Overall statistics
+        final_avg_loss = running_loss / epochs
+        
+        return final_avg_loss
+    
+
+
+
+
+
 # Server implementation
 class Server:
     def __init__(self, model_name, num_classes=10, device='cpu', checkpoint_dir="./checkpoints", cut_layer=1):
@@ -618,8 +777,10 @@ class Server:
 
 class Decoder(nn.Module):
     """Wrapper class for model-specific decoders with training and evaluation utilities"""
-    def __init__(self, model_name, cut_layer, input_size=(224, 224), device='cpu', checkpoint_dir="./checkpoints"):
+    def __init__(self, args, model_name, cut_layer, input_size=(224, 224), device='cpu', checkpoint_dir="./checkpoints", 
+                 normalization_mean=None, normalization_std=None):
         super().__init__()
+        self.args = args
         self.model_name = model_name
         self.cut_layer = cut_layer
         self.input_size = input_size
@@ -628,50 +789,91 @@ class Decoder(nn.Module):
         os.makedirs(checkpoint_dir, exist_ok=True)
         self.checkpoint_path = os.path.join(checkpoint_dir, f"decoder_{model_name}_cut{cut_layer}.pth")
         
+        # Store normalization parameters for denormalization
+        self.normalization_mean = normalization_mean
+        self.normalization_std = normalization_std
+        
         # Instantiate the appropriate model-specific decoder
         if model_name == 'resnet18':
-            self.decoder = ResNet18Decoder(cut_layer=cut_layer, input_size=input_size)
+            self.decoder = ResNet18Decoder(cut_layer=cut_layer, input_size=input_size).to(device)
         elif model_name == 'resnet50':
-            self.decoder = ResNet50Decoder(cut_layer=cut_layer, input_size=input_size)
+            self.decoder = ResNet50Decoder(cut_layer=cut_layer, input_size=input_size).to(device)
         elif model_name == 'vgg11':
-            self.decoder = VGG11Decoder(cut_layer=cut_layer, input_size=input_size)
+            self.decoder = VGG11Decoder(cut_layer=cut_layer, input_size=input_size).to(device)
         elif model_name == 'vgg19':
-            self.decoder = VGG19Decoder(cut_layer=cut_layer, input_size=input_size)
+            self.decoder = VGG19Decoder(cut_layer=cut_layer, input_size=input_size).to(device)
         elif model_name == 'densenet121':
-            self.decoder = DenseNet121Decoder(cut_layer=cut_layer, input_size=input_size)
+            self.decoder = DenseNet121Decoder(cut_layer=cut_layer, input_size=input_size).to(device)
         elif model_name == 'vit_b16':
-            self.decoder = ViTB16Decoder(cut_layer=cut_layer, input_size=input_size)
+            self.decoder = ViTB16Decoder(cut_layer=cut_layer, input_size=input_size).to(device)
         else:
             raise Exception(f"Model {model_name} not supported")
         
         # Initialize optimizer
         self.optimizer = optim.Adam(self.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
-        
+                
         # Loss function for reconstruction
         self.reconstruction_loss = nn.MSELoss()
-        self.perceptual_loss = nn.L1Loss()
+
+        self.l1_loss = nn.L1Loss()
+        
+        # Total variation loss weight
+        self.tv_weight = 0.001  # Small weight to avoid over-smoothing
+        self.l1_weight = 0.001  # Small weight to avoid over-smoothing
     
     def forward(self, backbone_output):
         """Forward pass through decoder"""
         # Delegate to the model-specific decoder
         return self.decoder(backbone_output)
     
+    def total_variation_loss(self, img):
+        """Compute total variation loss for smoothness regularization
+        
+        Args:
+            img: Image tensor [B, C, H, W]
+        
+        Returns:
+            Total variation loss (scalar)
+        """
+        bs_img, c_img, h_img, w_img = img.size()
+        tv_h = torch.pow(img[:, :, 1:, :] - img[:, :, :-1, :], 2).sum()
+        tv_w = torch.pow(img[:, :, :, 1:] - img[:, :, :, :-1], 2).sum()
+        return (tv_h + tv_w) / (bs_img * c_img * h_img * w_img)
+    
     def compute_reconstruction_loss(self, reconstructed, original):
-        """Compute reconstruction loss using MSE and perceptual loss"""
-        # Normalize original to [0, 1] if needed
-        if original.max() > 1.0:
-            original = original / 255.0
+        """Compute reconstruction loss using MSE and Total Variation loss
         
-        # MSE loss for pixel-wise reconstruction
-        mse_loss = self.reconstruction_loss(reconstructed, original)
+        Args:
+            reconstructed: Reconstructed images in [0, 1] range from decoder
+            original: Original images in normalized range (e.g., ImageNet normalization)
         
-        # L1 loss for perceptual quality
-        l1_loss = self.perceptual_loss(reconstructed, original)
+        Returns:
+            total_loss, mse_loss, tv_loss
+        """
+        # Denormalize original images from normalized range to [0, 1]
+        if self.normalization_mean is not None and self.normalization_std is not None:
+            mean = torch.tensor(self.normalization_mean).view(1, 3, 1, 1).to(original.device)
+            std = torch.tensor(self.normalization_std).view(1, 3, 1, 1).to(original.device)
+            original_denorm = original * std + mean  # Denormalize to [0, 1]
+        else:
+            # Fallback: if max > 1, assume it's in [0, 255] range
+            if original.max() > 1.0:
+                original_denorm = original / 255.0
+            else:
+                raise Exception("Normalization parameters are not set and the original images are not in [0, 255] range")
         
-        # Combined loss
-        total_loss = mse_loss + 0.1 * l1_loss
+        # MSE loss for pixel-wise reconstruction fidelity
+        mse_loss = self.reconstruction_loss(reconstructed, original_denorm)
+
+        l1_loss = self.l1_loss(reconstructed, original_denorm)
         
-        return total_loss, mse_loss, l1_loss
+        # Total variation loss for smoothness regularization
+        tv_loss = self.total_variation_loss(reconstructed)
+        
+        # Combined loss: MSE for fidelity + TV for smoothness
+        total_loss = mse_loss + self.tv_weight * tv_loss + self.l1_weight * l1_loss
+        
+        return total_loss, mse_loss, tv_loss
     
     def train_step(self, backbone_output, original_images):
         """Single training step for decoder"""
@@ -681,14 +883,14 @@ class Decoder(nn.Module):
         reconstructed = self.forward(backbone_output)
         
         # Compute loss
-        total_loss, mse_loss, l1_loss = self.compute_reconstruction_loss(reconstructed, original_images)
+        total_loss, mse_loss, tv_loss = self.compute_reconstruction_loss(reconstructed, original_images)
         
         # Backward pass
         self.optimizer.zero_grad()
         total_loss.backward()
         self.optimizer.step()
         
-        return total_loss.item(), mse_loss.item(), l1_loss.item(), reconstructed
+        return total_loss.item(), mse_loss.item(), tv_loss.item(), reconstructed
     
     def evaluate(self, backbone_output, original_images):
         """Evaluate decoder without updating weights"""
@@ -696,9 +898,10 @@ class Decoder(nn.Module):
         
         with torch.no_grad():
             reconstructed = self.forward(backbone_output)
-            total_loss, mse_loss, l1_loss = self.compute_reconstruction_loss(reconstructed, original_images)
+            total_loss, mse_loss, tv_loss = self.compute_reconstruction_loss(reconstructed, original_images)
             
-        return total_loss.item(), mse_loss.item(), l1_loss.item(), reconstructed
+        return total_loss.item(), mse_loss.item(), tv_loss.item(), reconstructed
+    
     
     def save_model(self):
         """Save decoder model"""
@@ -714,13 +917,29 @@ class Decoder(nn.Module):
         return False
     
     def get_reconstruction_quality_metrics(self, reconstructed, original):
-        """Calculate quality metrics for reconstruction"""
-        # Ensure both images are in the same range
-        if original.max() > 1.0:
-            original = original / 255.0
+        """Calculate quality metrics for reconstruction
+        
+        Args:
+            reconstructed: Reconstructed images in [0, 1] range from decoder
+            original: Original images in normalized range (e.g., ImageNet normalization)
+        
+        Returns:
+            psnr, ssim
+        """
+        # Denormalize original images from normalized range to [0, 1]
+        if self.normalization_mean is not None and self.normalization_std is not None:
+            mean = torch.tensor(self.normalization_mean).view(1, 3, 1, 1).to(original.device)
+            std = torch.tensor(self.normalization_std).view(1, 3, 1, 1).to(original.device)
+            original_denorm = original * std + mean  # Denormalize to [0, 1]
+        else:
+            # Fallback: if max > 1, assume it's in [0, 255] range
+            if original.max() > 1.0:
+                original_denorm = original / 255.0
+            else:
+                original_denorm = original
         
         # Calculate PSNR
-        mse = torch.mean((reconstructed - original) ** 2)
+        mse = torch.mean((reconstructed - original_denorm) ** 2)
         psnr = 20 * torch.log10(1.0 / torch.sqrt(mse))
         
         # Calculate SSIM (simplified version)
@@ -739,7 +958,7 @@ class Decoder(nn.Module):
             
             return ssim
         
-        ssim = ssim_simple(reconstructed, original)
+        ssim = ssim_simple(reconstructed, original_denorm)
         
         return psnr.item(), ssim.item()
 

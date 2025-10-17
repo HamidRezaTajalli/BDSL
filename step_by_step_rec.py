@@ -296,6 +296,7 @@ if __name__ == "__main__":
 
     # Create decoder module with normalization parameters from reconstruction dataset
     decoder = Decoder(
+        args=args,
         model_name=args.model, 
         cut_layer=args.cut_layer, 
         device=device, 
