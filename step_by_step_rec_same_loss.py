@@ -39,7 +39,7 @@ def parse_args():
                       help='Number of workers for data loading (default: 0)')
     parser.add_argument('--cut_layer', type=int, default=1,
                       help='Cut layer for model splitting (default: 1)')
-    parser.add_argument('--checkpoint_dir', type=str, default='./step_by_step_rec_checkpoints',
+    parser.add_argument('--checkpoint_dir', type=str, default='./step_by_step_rec_same_checkpoints',
                       help='Directory to save checkpoints (default: ./step_by_step_rec_checkpoints)')
     parser.add_argument('--poisoning_rate', type=float, default=0.1,
                       help='Poisoning rate for malicious clients (default: 0.1)')
@@ -148,8 +148,7 @@ class RoundRobinSplitLearningSystem:
                 client.load_models(prev_client_id)
             
             # Train client
-            rec_loss = self.surrogate_head.train_step(self.server, self.decoder, epochs=epochs_per_client)
-            loss, accuracy = client.train_step(self.server, self.gated_fusion, epochs=epochs_per_client)
+            loss, accuracy = client.train_step_reconstruction(self.server, self.gated_fusion, self.surrogate_head, self.decoder, epochs=epochs_per_client)
             
             
             # Save client models for next client
@@ -170,7 +169,6 @@ class RoundRobinSplitLearningSystem:
             end_time = time.time()
             print(f"Client {client.client_id} completed training in {end_time - start_time:.2f}s")
             print(f"Final Loss: {loss:.4f}, Accuracy: {accuracy:.2f}%")
-            print(f"Final Reconstruction Loss: {rec_loss:.4f}")
         
         print("\n--- Round completed ---")
     
@@ -388,7 +386,7 @@ if __name__ == "__main__":
     args.poisoning_rate = real_poisoning_rate
 
     # saving the results in a csv file
-    results_path = Path("./results/step_by_step_rec")
+    results_path = Path("./results/step_by_step_rec_same")
     if not results_path.exists():
         results_path.mkdir(parents=True, exist_ok=True)
     

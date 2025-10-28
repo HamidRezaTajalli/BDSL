@@ -376,6 +376,7 @@ class Client:
                 gate_input_z1 = backbone_output.detach().clone().requires_grad_(True)
                 # print(f"gate_input_z1.shape: {gate_input_z1.shape}")
 
+                gated_fusion.train()
                 gate_output = gated_fusion(gate_input_z1, gate_input_z2)
                 # print(f"gate_output.shape: {gate_output.shape}")
                 # exit()
@@ -536,6 +537,153 @@ class Client:
         return False
 
 
+    def train_step_reconstruction(self, server, gated_fusion, surrogate_head, decoder, epochs=1):
+        """Complete training step with the server and resonctruction modules (surrogate head and decoder)"""
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        
+        self.head.train()  # Set head to training mode
+        
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            epoch_correct = 0
+            epoch_total = 0
+            
+            # Create iterator for surrogate head dataloader
+            surrogate_iter = iter(surrogate_head.dataloader)
+            
+            for inputs, labels in self.dataloader:
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
+
+                # Get reconstruction inputs from surrogate_head dataloader
+                try:
+                    rec_inputs, rec_labels = next(surrogate_iter)
+                except StopIteration:
+                    # Restart iterator if surrogate dataloader is exhausted
+                    surrogate_iter = iter(surrogate_head.dataloader)
+                    rec_inputs, rec_labels = next(surrogate_iter)
+                
+                rec_inputs, rec_labels = rec_inputs.to(self.device), rec_labels.to(self.device)
+
+                # print(f"inputs.shape: {inputs.shape}")
+                # print(f"labels.shape: {labels.shape}")
+                # print(f"inputs.dtype: {inputs.dtype}")
+                # print(f"labels.dtype: {labels.dtype}")
+                # print(f"rec_inputs.shape: {rec_inputs.shape}")
+                # print(f"rec_labels.shape: {rec_labels.shape}")
+                
+                # Client: Head forward pass
+                head_output = self.head(inputs)
+                # print(f"head_output.shape: {head_output.shape}")
+
+                # Surrogate Head: Forward pass with reconstruction inputs
+                surrogate_head.head.train()
+                surrogate_head_output = surrogate_head.head(rec_inputs)
+                # print(f"surrogate_head_output.shape: {surrogate_head_output.shape}")
+
+                backbone_input = head_output.detach().clone().requires_grad_(True)
+                gate_input_z2 = head_output.detach().clone().requires_grad_(True)
+                # print(f"backbone_input.shape: {backbone_input.shape}")
+                # print(f"gate_input_z2.shape: {gate_input_z2.shape}")
+
+                backbone_input_rec = surrogate_head_output.detach().clone().requires_grad_(True)
+                
+                # Server: Process through backbone
+                backbone_output = server.process(backbone_input)                
+                # print(f"backbone_output.shape: {backbone_output.shape}")
+
+                backbone_output_rec = server.process(backbone_input_rec)
+
+                # tail_input = backbone_output.detach().clone().requires_grad_(True)
+                gate_input_z1 = backbone_output.detach().clone().requires_grad_(True)
+                # print(f"gate_input_z1.shape: {gate_input_z1.shape}")
+
+                decoder_input = backbone_output_rec.detach().clone().requires_grad_(True)
+                decoder.train()
+                decoder_output = decoder(decoder_input)
+                # print(f"decoder_output.shape: {decoder_output.shape}")
+
+                gated_fusion.train()
+                gate_output = gated_fusion(gate_input_z1, gate_input_z2)
+                # print(f"gate_output.shape: {gate_output.shape}")
+                # exit()
+
+                tail_input = gate_output.detach().clone().requires_grad_(True)
+
+
+
+
+                self.tail.train()
+
+                tail_output = self.tail(tail_input)
+
+            
+                
+                # Client: Compute loss with tail
+                loss = self.compute_loss(tail_output, labels)
+
+                self.tail_optimizer.zero_grad()
+                loss.backward()
+                self.tail_optimizer.step()
+
+
+                # Gated Fusion: Backward pass (both HoneyPot and Gate)
+                gated_fusion.zero_grad()
+                gate_output.backward(tail_input.grad)
+                gated_fusion.step()
+
+
+                # compute decoder loss
+                rec_loss, rec_mse_loss, rec_tv_loss = decoder.compute_reconstruction_loss(decoder_output, rec_inputs)
+
+                decoder.optimizer.zero_grad()
+                rec_loss.backward()
+                decoder.optimizer.step()
+
+                
+                
+                # Server: Backward pass with gradient
+                # server.backward(backbone_output, tail_input.grad)
+                server_grad = gate_input_z1.grad + decoder_input.grad
+                # server.backbone_optimizer.zero_grad()
+                # backbone_output_rec.backward(decoder_input.grad)
+                server.backward(backbone_output_rec, server_grad)
+                server.backward(backbone_output, server_grad)
+                # TODO: bayad in formul ro motmaen besham doroste!
+                
+                head_grad = gate_input_z2.grad
+                if backbone_input.grad is not None:
+                    head_grad = head_grad + backbone_input.grad
+                
+                # Client: Complete backward pass
+                self.backward_pass(head_output, head_grad)
+
+                surrogate_head.backward_pass(surrogate_head_output, backbone_input_rec.grad)
+                
+                # Statistics
+                epoch_loss += loss.item()
+                _, predicted = tail_output.max(1)
+                epoch_total += labels.size(0)
+                epoch_correct += predicted.eq(labels).sum().item()
+            
+            # Calculate epoch statistics
+            accuracy = 100 * epoch_correct / epoch_total
+            avg_loss = epoch_loss / len(self.dataloader)
+            
+            print(f"Client {self.client_id}, Epoch {epoch+1}/{epochs}, "
+                  f"Loss: {avg_loss:.4f}, Accuracy: {accuracy:.2f}%")
+            
+            running_loss += avg_loss
+            correct += epoch_correct
+            total += epoch_total
+        
+        # Overall statistics
+        final_accuracy = 100 * correct / total
+        final_avg_loss = running_loss / epochs
+        
+        return final_avg_loss, final_accuracy
+    
 
 
 class Surrogate_Head:
@@ -652,6 +800,7 @@ class Surrogate_Head:
                 decoder_input = backbone_output.detach().clone().requires_grad_(True)
                 # print(f"decoder_input.shape: {decoder_input.shape}")
 
+                decoder.train()
                 decoder_output = decoder(decoder_input)
                 # print(f"decoder_output.shape: {decoder_output.shape}")
             

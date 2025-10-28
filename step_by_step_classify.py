@@ -39,8 +39,8 @@ def parse_args():
                       help='Number of workers for data loading (default: 0)')
     parser.add_argument('--cut_layer', type=int, default=1,
                       help='Cut layer for model splitting (default: 1)')
-    parser.add_argument('--checkpoint_dir', type=str, default='./step_by_step_rec_checkpoints',
-                      help='Directory to save checkpoints (default: ./step_by_step_rec_checkpoints)')
+    parser.add_argument('--checkpoint_dir', type=str, default='./step_by_step_classify_checkpoints',
+                      help='Directory to save checkpoints (default: ./step_by_step_classify_checkpoints)')
     parser.add_argument('--poisoning_rate', type=float, default=0.1,
                       help='Poisoning rate for malicious clients (default: 0.1)')
     parser.add_argument('--target_label', type=int, default=0,
@@ -89,12 +89,11 @@ def parse_args():
 
 # Multi-client round-robin split learning system
 class RoundRobinSplitLearningSystem:
-    def __init__(self, server, clients, gated_fusion, surrogate_head, decoder, checkpoint_dir="./checkpoints", backbone_freeze_rounds=0, num_rounds=100):
+    def __init__(self, server, clients, gated_fusion, surrogate_client, checkpoint_dir="./checkpoints", backbone_freeze_rounds=0, num_rounds=100):
         self.server = server
         self.clients = clients
         self.gated_fusion = gated_fusion
-        self.surrogate_head = surrogate_head
-        self.decoder = decoder
+        self.surrogate_client = surrogate_client
         self.checkpoint_dir = checkpoint_dir
         os.makedirs(checkpoint_dir, exist_ok=True)
         self.backbone_freeze_rounds = backbone_freeze_rounds
@@ -129,8 +128,8 @@ class RoundRobinSplitLearningSystem:
         # First client initializes or loads from previous round
         self.server.load_model()  # Load server model if available
         self.gated_fusion.load_model()  # Load gated fusion model if available
-        self.surrogate_head.load_model()  # Load surrogate head model if available
-        self.decoder.load_model()  # Load decoder model if available
+        self.surrogate_client.load_models(self.surrogate_client.client_id)  # Load surrogate client model if available
+
 
 
         for i, client in enumerate(self.clients):
@@ -148,7 +147,7 @@ class RoundRobinSplitLearningSystem:
                 client.load_models(prev_client_id)
             
             # Train client
-            rec_loss = self.surrogate_head.train_step(self.server, self.decoder, epochs=epochs_per_client)
+            surrogate_loss, surrogate_accuracy = self.surrogate_client.train_step_attack_only(self.server, epochs=epochs_per_client)
             loss, accuracy = client.train_step(self.server, self.gated_fusion, epochs=epochs_per_client)
             
             
@@ -160,17 +159,14 @@ class RoundRobinSplitLearningSystem:
             
             # Save gated fusion model after each client
             self.gated_fusion.save_model()
+
+            # Save surrogate client model after each client
+            self.surrogate_client.save_models()
             
-            # Save surrogate head model after each client
-            self.surrogate_head.save_model()
-            
-            # Save decoder model after each client
-            self.decoder.save_model()
             
             end_time = time.time()
             print(f"Client {client.client_id} completed training in {end_time - start_time:.2f}s")
             print(f"Final Loss: {loss:.4f}, Accuracy: {accuracy:.2f}%")
-            print(f"Final Reconstruction Loss: {rec_loss:.4f}")
         
         print("\n--- Round completed ---")
     
@@ -292,22 +288,30 @@ if __name__ == "__main__":
     gated_fusion = GatedFusion(model_name=args.model, cut_layer=args.cut_layer, checkpoint_dir=args.checkpoint_dir).to(device)
 
     # Create reconstruction dataset (must be created before decoder to get normalization params)
-    reconstruction_dataset, rec_num_classes = get_reconstruction_datasets(args.dataset.lower(), same_dataset=True, size_fraction=0.1)
+    reconstruction_dataset, rec_num_classes = get_reconstruction_datasets(args.dataset.lower(), same_dataset=False, size_fraction=0.1)
 
-    # Create decoder module with normalization parameters from reconstruction dataset
-    decoder = Decoder(
-        args=args,
-        model_name=args.model, 
-        cut_layer=args.cut_layer, 
-        device=device, 
-        checkpoint_dir=args.checkpoint_dir,
-        normalization_mean=reconstruction_dataset.mean,
-        normalization_std=reconstruction_dataset.std
-    )
 
-    # Create surrogate head module
-    surrogate_head = Surrogate_Head(args=args, model_name=args.model, dataset=reconstruction_dataset, batch_size=args.batch_size, num_classes=num_classes, device=device, checkpoint_dir=args.checkpoint_dir, cut_layer=args.cut_layer)
-    
+    # Create a Subset from reconstruction_dataset with all its indices
+    reconstruction_dataset_size = len(reconstruction_dataset)
+    reconstruction_indices = list(range(reconstruction_dataset_size))
+    reconstruction_subset = torch.utils.data.Subset(reconstruction_dataset, reconstruction_indices)
+
+    # create the surrogate client
+    surrogate_client = Client(
+            args=args,
+            model_name=args.model,
+            client_id=args.num_clients * 2,
+            is_malicious=False,
+            dataset=reconstruction_subset,
+            batch_size=args.batch_size,
+            num_classes=rec_num_classes,
+            device=device,
+            checkpoint_dir=args.checkpoint_dir,
+            cut_layer=args.cut_layer
+        )
+
+
+
     # Create multiple clients with different data partitions
     clients = []
     malicious_clients = []
@@ -351,8 +355,7 @@ if __name__ == "__main__":
         server,
         clients,
         gated_fusion,
-        surrogate_head,
-        decoder,
+        surrogate_client,
         checkpoint_dir=args.checkpoint_dir,
         backbone_freeze_rounds=args.backbone_freeze_rounds,
         num_rounds=args.num_rounds
@@ -388,7 +391,7 @@ if __name__ == "__main__":
     args.poisoning_rate = real_poisoning_rate
 
     # saving the results in a csv file
-    results_path = Path("./results/step_by_step_rec")
+    results_path = Path("./results/step_by_step_classify")
     if not results_path.exists():
         results_path.mkdir(parents=True, exist_ok=True)
     
