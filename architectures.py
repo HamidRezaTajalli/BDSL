@@ -72,13 +72,15 @@ class Gate(nn.Module):
             nn.Sigmoid()
         )
     
-    def forward(self, z1, z2_proj):
+    def forward(self, z1, z2_proj, return_gate: bool = False):
         z_cat = torch.cat([z1, z2_proj], dim=1)  # [B, z1_dim + z1_dim]
         # print(f"z_cat.shape: {z_cat.shape}")
         g = self.gate(z_cat)  # [B, z1_dim]
         # print(f"g.shape: {g.shape}")  
         fused = g * z1 + (1 - g) * z2_proj  # weighted fusion
         # print(f"fused.shape: {fused.shape}")
+        if return_gate:
+            return fused, g
         return fused
 
 
@@ -209,11 +211,14 @@ class GatedFusion(nn.Module):
 
 
 
-    def forward(self, z1, z2):
+    def forward(self, z1, z2, return_gate: bool = False):
         # HoneyPot: Project z2 to match z1 dimension
         z2_proj = self.honey_pot(z2)  # [B, z1_dim]
         
         # Gate: Fuse z1 and z2_proj
+        if return_gate:
+            fused, gate_values = self.gate(z1, z2_proj, return_gate=True)
+            return fused, z2_proj, gate_values  # [B, z1_dim], [B, z1_dim], [B, z1_dim]
         fused = self.gate(z1, z2_proj)  # [B, z1_dim]
         
         return fused  # [B, z1_dim]
