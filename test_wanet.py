@@ -2,6 +2,7 @@ import csv
 from pathlib import Path
 import random
 from matplotlib import pyplot as plt
+from attacks.wanet import create_wanet_poisoned_testset, create_wanet_poisoned_trainset
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -16,31 +17,30 @@ import argparse
 import math
 import numpy as np
 
-from architectures import Server, Client, GatedFusion, print_model_structures
+from architectures import Server, Client, print_model_structures
 
 from attacks.attacks import create_poisoned_set, get_wanet_grids
 
 from datasets.handler import get_datasets
 
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Split Learning Training')
     parser.add_argument('--model', type=str, default='resnet18', choices=['resnet18', 'resnet50', 'vgg11', 'vgg19', 'densenet121', 'vit_b16'],
                       help='Model architecture to use (default: resnet18)')
-    parser.add_argument('--num_clients', type=int, default=10,
+    parser.add_argument('--num_clients', type=int, default=20,
                       help='Number of clients (default: 10)')
-    parser.add_argument('--num_rounds', type=int, default=100,
-                      help='Number of training rounds (default: 100)')
+    parser.add_argument('--num_rounds', type=int, default=40,
+                      help='Number of training rounds (default: 40)')
     parser.add_argument('--epochs_per_client', type=int, default=1,
                       help='Number of epochs per client per round (default: 1)')
-    parser.add_argument('--batch_size', type=int, default=128,
-                      help='Batch size for training (default: 128)')
-    parser.add_argument('--num_workers', type=int, default=0,
-                      help='Number of workers for data loading (default: 0)')
+    parser.add_argument('--batch_size', type=int, default=64,
+                      help='Batch size for training (default: 32)')
     parser.add_argument('--cut_layer', type=int, default=1,
                       help='Cut layer for model splitting (default: 1)')
-    parser.add_argument('--checkpoint_dir', type=str, default='./step_by_step_checkpoints',
-                      help='Directory to save checkpoints (default: ./step_by_step_checkpoints)')
+    parser.add_argument('--checkpoint_dir', type=str, default='./split_learning_checkpoints',
+                      help='Directory to save checkpoints (default: ./split_learning_checkpoints)')
     parser.add_argument('--poisoning_rate', type=float, default=0.1,
                       help='Poisoning rate for malicious clients (default: 0.1)')
     parser.add_argument('--target_label', type=int, default=0,
@@ -49,17 +49,15 @@ def parse_args():
                       help='Experiment number (default: 0)')
     parser.add_argument('--dataset', type=str, default='CIFAR10', choices=['CIFAR10', 'CIFAR100', 'MNIST'],
                       help='Dataset to use (default: CIFAR10)')
-    parser.add_argument('--attack', type=str, default='badnet', choices=['badnet', 'wanet', 'blend', 'sig'],
+    parser.add_argument('--attack', type=str, default='wanet', choices=['badnet', 'wanet', 'blend'],
                       help='Attack type to use (default: badnet)')
     parser.add_argument('--trigger_size', type=float, default=0.08,
                       help='Trigger size for badnet attack (default: 0.08)')
     parser.add_argument('--attack_mode', type=str, default='all-to-one', choices=['all-to-all', 'all-to-one'],
                       help='Attack mode for wanet attack (default: all-to-one)')
-    parser.add_argument('--backbone_freeze_rounds', type=int, default=10,
-                      help='Number of consecutive rounds to freeze backbone updates at a random starting point (default: 10)')
-    
 
-    # WaNet-specific parameters
+
+        # WaNet-specific parameters
     parser.add_argument('--s', type=float, default=0.5,
                       help='WaNet parameter s for warping strength (default: 0.5)')
     parser.add_argument('--k', type=int, default=4,
@@ -72,15 +70,8 @@ def parse_args():
     # Blend-specific parameters
     parser.add_argument('--blend_alpha', type=float, default=0.2,
                       help='Blend parameter alpha for blending (default: 0.2)')
-    
-    # SIG-specific parameters: delta_s, delta_t, f
-    parser.add_argument('--delta_s', type=int, default=60,
-                      help='SIG parameter delta_s for signal strength (default: 60)')
-    parser.add_argument('--delta_t', type=int, default=30,
-                      help='SIG parameter delta_t for signal strength (default: 30)')
-    parser.add_argument('--f', type=int, default=6,
-                      help='SIG parameter f for signal frequency (default: 6)')
-    
+
+                      
     return parser.parse_args()
 
 
@@ -89,36 +80,11 @@ def parse_args():
 
 # Multi-client round-robin split learning system
 class RoundRobinSplitLearningSystem:
-    def __init__(self, server, clients, gated_fusion, checkpoint_dir="./checkpoints", backbone_freeze_rounds=0, num_rounds=100):
+    def __init__(self, server, clients, checkpoint_dir="./checkpoints"):
         self.server = server
         self.clients = clients
-        self.gated_fusion = gated_fusion
         self.checkpoint_dir = checkpoint_dir
         os.makedirs(checkpoint_dir, exist_ok=True)
-        self.backbone_freeze_rounds = backbone_freeze_rounds
-        self.num_rounds = num_rounds
-        
-        # Calculate random freeze start and end rounds
-        if self.backbone_freeze_rounds > 0 and self.num_rounds > self.backbone_freeze_rounds:
-            # Draw a random starting round between 0 and (num_rounds - freeze_rounds)
-            self.freeze_start_round = random.randint(0, self.num_rounds - self.backbone_freeze_rounds)
-            self.freeze_end_round = self.freeze_start_round + self.backbone_freeze_rounds
-            print(f"\n*** Backbone Freeze Schedule ***")
-            print(f"Total rounds: {self.num_rounds}")
-            print(f"Freeze duration: {self.backbone_freeze_rounds} rounds")
-            print(f"Freeze will be active from round {self.freeze_start_round} to round {self.freeze_end_round - 1} (inclusive)")
-            print(f"********************************\n")
-        else:
-            self.freeze_start_round = -1  # Disabled
-            self.freeze_end_round = -1
-            if self.backbone_freeze_rounds > 0:
-                print(f"Warning: backbone_freeze_rounds ({self.backbone_freeze_rounds}) >= num_rounds ({self.num_rounds}). Freezing disabled.")
-
-            if self.backbone_freeze_rounds > 0 and self.num_rounds <= self.backbone_freeze_rounds:
-                raise Exception(f"Backbone freeze rounds ({self.backbone_freeze_rounds}) >= num_rounds ({self.num_rounds}). Freezing disabled.")
-        
-        # Initially set backbone freeze to False (will be enabled when reaching freeze_start_round)
-        self.server.set_backbone_freeze(False)
     
     def train_round(self, epochs_per_client=1):
         """Train all clients in a round-robin fashion for one round"""
@@ -126,7 +92,6 @@ class RoundRobinSplitLearningSystem:
         
         # First client initializes or loads from previous round
         self.server.load_model()  # Load server model if available
-        self.gated_fusion.load_model()  # Load gated fusion model if available
 
         for i, client in enumerate(self.clients):
             print(f"\n--- Training Client {client.client_id} ---")
@@ -143,16 +108,13 @@ class RoundRobinSplitLearningSystem:
                 client.load_models(prev_client_id)
             
             # Train client
-            loss, accuracy = client.train_step(self.server, self.gated_fusion, epochs=epochs_per_client)
+            loss, accuracy = client.train_step_attack_only(self.server, epochs=epochs_per_client)
             
             # Save client models for next client
             client.save_models()
             
             # Save server model after each client (optional, could also save only at the end of the round)
             self.server.save_model()
-            
-            # Save gated fusion model after each client
-            self.gated_fusion.save_model()
             
             end_time = time.time()
             print(f"Client {client.client_id} completed training in {end_time - start_time:.2f}s")
@@ -163,21 +125,7 @@ class RoundRobinSplitLearningSystem:
     def train_multiple_rounds(self, num_rounds=5, epochs_per_client=1):
         """Run multiple rounds of training"""
         for round_num in range(num_rounds):
-            # Check if we should enable/disable backbone freezing based on current round
-            if self.freeze_start_round >= 0:  # Freezing is configured
-                if round_num == self.freeze_start_round:
-                    # Start freezing
-                    print(f"\n>>> ENABLING Backbone Freeze (Round {round_num}) <<<")
-                    self.server.set_backbone_freeze(True)
-                elif round_num == self.freeze_end_round:
-                    # Stop freezing
-                    print(f"\n>>> DISABLING Backbone Freeze (Round {round_num}) <<<")
-                    self.server.set_backbone_freeze(False)
-            
             print(f"\n===== Starting Round {round_num+1}/{num_rounds} =====")
-            # Show freeze status
-            freeze_status = "FROZEN" if self.server.freeze_backbone else "ACTIVE"
-            print(f"Backbone Status: {freeze_status}")
             self.train_round(epochs_per_client)
             print(f"===== Completed Round {round_num+1}/{num_rounds} =====\n")
 
@@ -186,9 +134,9 @@ class RoundRobinSplitLearningSystem:
 
 # Additional utility functions
 
-def evaluate_model(clients, server, test_dataset, device, num_workers=0):
+def evaluate_model(clients, server, test_dataset, device, poisoned=False):
     """Evaluate the model on test data using the latest client model"""
-    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False, num_workers=num_workers)
+    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
     
     # Use the last client's models for evaluation
     last_client = clients[-1]
@@ -205,6 +153,7 @@ def evaluate_model(clients, server, test_dataset, device, num_workers=0):
     
     with torch.no_grad():
         for inputs, labels in test_loader:
+
             inputs, labels = inputs.to(device), labels.to(device)
             
             # Forward pass through the head
@@ -234,6 +183,7 @@ if __name__ == "__main__":
     print(args)
     print("="*50)
     
+
     
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -242,7 +192,6 @@ if __name__ == "__main__":
     # Get train and testdatasets
     train_dataset, test_dataset, num_classes = get_datasets(args.dataset.lower())
     args.num_classes = num_classes
-    args.delta = args.delta_t
 
     if args.attack == 'wanet':
         args.noise_grid, args.identity_grid = get_wanet_grids(args, train_dataset)
@@ -254,9 +203,9 @@ if __name__ == "__main__":
     if not checkpoint_dir.exists():
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    suffix = f"_{args.exp_num}_{args.model}_{args.dataset}_{args.cut_layer}_{args.num_clients}_{args.num_rounds}_{args.epochs_per_client}_{args.poisoning_rate}_{args.target_label}_{args.attack}_{args.trigger_size}_{args.attack_mode}"
+    suffix = f"_{args.model}_{args.cut_layer}_{args.num_clients}_{args.num_rounds}_{args.epochs_per_client}_{args.poisoning_rate}"
 
-    checkpoint_dir = checkpoint_dir / suffix / f"{time.time()}"
+    checkpoint_dir = checkpoint_dir / suffix
     if not checkpoint_dir.exists():
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
     args.checkpoint_dir = checkpoint_dir
@@ -272,10 +221,6 @@ if __name__ == "__main__":
     )
 
     # print_model_structures(args.model, args.cut_layer)
-
-
-    # Create gated fusion
-    gated_fusion = GatedFusion(model_name=args.model, cut_layer=args.cut_layer, checkpoint_dir=args.checkpoint_dir).to(device)
     
     # Create multiple clients with different data partitions
     clients = []
@@ -299,7 +244,7 @@ if __name__ == "__main__":
         
 
         if i in malicious_clients:
-            poisoned_subset, poisoned_indices = create_poisoned_set(args, subset)
+            poisoned_subset, poisoned_indices = create_wanet_poisoned_trainset(args, subset)
             subset = poisoned_subset
         
         clients.append(Client(
@@ -316,26 +261,13 @@ if __name__ == "__main__":
         ))
     
     # Create round-robin split learning system
-    system = RoundRobinSplitLearningSystem(
-        server,
-        clients,
-        gated_fusion,
-        checkpoint_dir=args.checkpoint_dir,
-        backbone_freeze_rounds=args.backbone_freeze_rounds,
-        num_rounds=args.num_rounds
-    )
+    system = RoundRobinSplitLearningSystem(server, clients, checkpoint_dir=args.checkpoint_dir)
     
-    start_time = time.perf_counter()
-
     # Train for multiple rounds
     system.train_multiple_rounds(num_rounds=args.num_rounds, epochs_per_client=args.epochs_per_client)
 
-    end_time = time.perf_counter()
-    elapsed_time = end_time - start_time
-    print(f"Training time: {elapsed_time:.2f}s")
-
     # Evaluate on test set
-    test_accuracy = evaluate_model(clients, server, test_dataset, device, num_workers=args.num_workers)
+    test_accuracy = evaluate_model(clients, server, test_dataset, device, poisoned=False)
     print(f"\nFinal test accuracy after training: {test_accuracy:.2f}%")
 
     # Create a Subset from test_dataset with all its indices
@@ -346,23 +278,22 @@ if __name__ == "__main__":
     # Create a poisoned dataset with full poisoning rate
     real_poisoning_rate = args.poisoning_rate
     args.poisoning_rate = 1.0
-    args.delta = args.delta_s
-    poisoned_test_subset, _ = create_poisoned_set(args, test_subset)
+    poisoned_test_subset, _ = create_wanet_poisoned_testset(args, test_subset)
     
     # Evaluate the model on the poisoned test set to test ASR
-    asr_accuracy = evaluate_model(clients, server, poisoned_test_subset, device, num_workers=args.num_workers)
+    asr_accuracy = evaluate_model(clients, server, poisoned_test_subset, device, poisoned=True)
     print(f"\nAttack Success Rate (ASR) on poisoned test set: {asr_accuracy:.2f}%")
     args.poisoning_rate = real_poisoning_rate
 
     # saving the results in a csv file
-    results_path = Path("./results")
+    results_path = Path("./results/attack_only")
     if not results_path.exists():
         results_path.mkdir(parents=True, exist_ok=True)
     
     csv_file_address = results_path / f"{args.dataset}.csv"
     if not csv_file_address.exists():
         csv_file_address.touch()
-        csv_header = ['EXP_ID', 'MODEL', 'DATASET', 'CUT_LAYER', 'NUM_CLIENTS', 'NUM_ROUNDS', 'EPOCHS_PER_CLIENT', 'POISONING_RATE', 'TARGET_LABEL', 'ATTACK', 'TRIGGER_SIZE', 'ATTACK_MODE', 'ET', 'CDA', 'ASR']
+        csv_header = ['EXP_ID', 'MODEL', 'DATASET', 'CUT_LAYER', 'NUM_CLIENTS', 'NUM_ROUNDS', 'EPOCHS_PER_CLIENT', 'POISONING_RATE', 'TARGET_LABEL', 'ATTACK', 'TRIGGER_SIZE', 'ATTACK_MODE', 'CDA', 'ASR']
         with open(csv_file_address, 'w') as f:
             writer = csv.writer(f)
             writer.writerow(csv_header)
@@ -370,7 +301,7 @@ if __name__ == "__main__":
 
     with open(csv_file_address, 'a') as f:
         writer = csv.writer(f)
-        writer.writerow([args.exp_num, args.model, args.dataset, args.cut_layer, args.num_clients, args.num_rounds, args.epochs_per_client, args.poisoning_rate, args.target_label, args.attack, args.trigger_size, args.attack_mode, elapsed_time, test_accuracy, asr_accuracy])
+        writer.writerow([args.exp_num, args.model, args.dataset, args.cut_layer, args.num_clients, args.num_rounds, args.epochs_per_client, args.poisoning_rate, args.target_label, args.attack, args.trigger_size, args.attack_mode, test_accuracy, asr_accuracy])
 
     
 

@@ -39,7 +39,7 @@ def parse_args():
                       help='Number of workers for data loading (default: 0)')
     parser.add_argument('--cut_layer', type=int, default=1,
                       help='Cut layer for model splitting (default: 1)')
-    parser.add_argument('--checkpoint_dir', type=str, default='./step_by_step_rec_same_checkpoints',
+    parser.add_argument('--checkpoint_dir', type=str, default='./step_by_step_rec_checkpoints',
                       help='Directory to save checkpoints (default: ./step_by_step_rec_checkpoints)')
     parser.add_argument('--poisoning_rate', type=float, default=0.1,
                       help='Poisoning rate for malicious clients (default: 0.1)')
@@ -47,7 +47,7 @@ def parse_args():
                       help='Target label for poisoning (default: 0)')
     parser.add_argument('--exp_num', type=int, default=0,
                       help='Experiment number (default: 0)')
-    parser.add_argument('--dataset', type=str, default='CIFAR10', choices=['CIFAR10', 'CIFAR100'],
+    parser.add_argument('--dataset', type=str, default='CIFAR10', choices=['CIFAR10', 'CIFAR100', 'MNIST'],
                       help='Dataset to use (default: CIFAR10)')
     parser.add_argument('--attack', type=str, default='badnet', choices=['badnet', 'wanet', 'blend', 'sig'],
                       help='Attack type to use (default: badnet)')
@@ -55,8 +55,8 @@ def parse_args():
                       help='Trigger size for badnet attack (default: 0.08)')
     parser.add_argument('--attack_mode', type=str, default='all-to-one', choices=['all-to-all', 'all-to-one'],
                       help='Attack mode for wanet attack (default: all-to-one)')
-    parser.add_argument('--backbone_freeze_rounds', type=int, default=10,
-                      help='Number of consecutive rounds to freeze backbone updates at a random starting point (default: 10)')
+    parser.add_argument('--backbone_freeze_rounds', type=int, default=0,
+                      help='Number of consecutive rounds to freeze backbone updates at a random starting point (default: 0)')
     
 
     # WaNet-specific parameters
@@ -148,7 +148,8 @@ class RoundRobinSplitLearningSystem:
                 client.load_models(prev_client_id)
             
             # Train client
-            loss, accuracy = client.train_step_reconstruction(self.server, self.gated_fusion, self.surrogate_head, self.decoder, epochs=epochs_per_client)
+            rec_loss = self.surrogate_head.train_step(self.server, self.decoder, epochs=epochs_per_client)
+            loss, accuracy = client.train_step(self.server, self.gated_fusion, epochs=epochs_per_client)
             
             
             # Save client models for next client
@@ -169,6 +170,7 @@ class RoundRobinSplitLearningSystem:
             end_time = time.time()
             print(f"Client {client.client_id} completed training in {end_time - start_time:.2f}s")
             print(f"Final Loss: {loss:.4f}, Accuracy: {accuracy:.2f}%")
+            print(f"Final Reconstruction Loss: {rec_loss:.4f}")
         
         print("\n--- Round completed ---")
     
@@ -197,6 +199,184 @@ class RoundRobinSplitLearningSystem:
 
 
 # Additional utility functions
+
+def poison_detect(clients, server, gated_fusion, clean_subset, poisoned_subset, device, batch_size=128, num_workers=0, save_path=None):
+    """Collect and visualize gating statistics for clean and poisoned samples."""
+
+    if not clients:
+        raise ValueError("poison_detect requires at least one client.")
+
+    last_client = clients[-1]
+    head = last_client.head
+    backbone = server.backbone
+
+    head.train()
+    backbone.train()
+    gated_fusion.train()
+
+    clean_loader = DataLoader(clean_subset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    poison_loader = DataLoader(poisoned_subset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+
+    sample_records = []
+
+    def _collect(loader, is_poison):
+        label = "poison" if is_poison else "clean"
+        for inputs, _ in loader:
+            inputs = inputs.to(device)
+            with torch.no_grad():
+                z2 = head(inputs)
+                z1 = server.process(z2)
+                _, z2_proj, gate_values = gated_fusion(z1, z2, return_gate=True)
+
+            l2_distance = torch.norm(z1 - z2_proj, p=2, dim=1)
+            cos_distance = 1 - F.cosine_similarity(z1, z2_proj, dim=1)
+
+            z1_cpu = z1.detach().cpu()
+            z2_proj_cpu = z2_proj.detach().cpu()
+            gate_cpu = gate_values.detach().cpu()
+
+            for idx in range(z1_cpu.size(0)):
+                gate_scalar = gate_cpu[idx].mean().item()
+                sample_records.append({
+                    "z1": z1_cpu[idx],
+                    "z2_proj": z2_proj_cpu[idx],
+                    "gate": gate_cpu[idx],
+                    "gate_scalar": gate_scalar,
+                    "l2_distance": l2_distance[idx].item(),
+                    "cos_distance": cos_distance[idx].item(),
+                    "label": label,
+                    "is_poison": is_poison
+                })
+
+    _collect(clean_loader, is_poison=False)
+    _collect(poison_loader, is_poison=True)
+
+    clean_points = [record for record in sample_records if not record["is_poison"]]
+    poison_points = [record for record in sample_records if record["is_poison"]]
+
+    if save_path is None:
+        save_dir = Path.cwd()
+        save_dir.mkdir(parents=True, exist_ok=True)
+        base_path = save_dir / "poison_detection_scatter.png"
+    else:
+        base_path = Path(save_path)
+        base_path.parent.mkdir(parents=True, exist_ok=True)
+
+    plot_paths = {}
+
+    # Combined scatter plot
+    plt.figure(figsize=(8, 6))
+
+    if clean_points:
+        plt.scatter(
+            [record["gate_scalar"] for record in clean_points],
+            [record["l2_distance"] for record in clean_points],
+            c="blue",
+            label="Clean",
+            alpha=0.7
+        )
+
+    if poison_points:
+        plt.scatter(
+            [record["gate_scalar"] for record in poison_points],
+            [record["l2_distance"] for record in poison_points],
+            c="red",
+            label="Poisoned",
+            alpha=0.7
+        )
+
+    plt.xlabel("Gate sigmoid (mean)")
+    plt.ylabel("L2 distance between z1 and z2_proj")
+    plt.title("Gated Fusion Poison Detection (Combined)")
+    plt.grid(True, linestyle="--", alpha=0.3)
+
+    if clean_points and poison_points:
+        plt.legend()
+
+    plt.tight_layout()
+
+    plt.savefig(base_path)
+    plt.close()
+    plot_paths["combined"] = base_path
+
+    # Clean-only scatter plot
+    if clean_points:
+        plt.figure(figsize=(8, 6))
+        plt.scatter(
+            [record["gate_scalar"] for record in clean_points],
+            [record["l2_distance"] for record in clean_points],
+            c="blue",
+            alpha=0.7
+        )
+        plt.xlabel("Gate sigmoid (mean)")
+        plt.ylabel("L2 distance between z1 and z2_proj")
+        plt.title("Gated Fusion Poison Detection (Clean Only)")
+        plt.grid(True, linestyle="--", alpha=0.3)
+        plt.tight_layout()
+        clean_path = base_path.with_name(f"{base_path.stem}_clean{base_path.suffix}")
+        plt.savefig(clean_path)
+        plt.close()
+        plot_paths["clean"] = clean_path
+
+    # Poison-only scatter plot
+    if poison_points:
+        plt.figure(figsize=(8, 6))
+        plt.scatter(
+            [record["gate_scalar"] for record in poison_points],
+            [record["l2_distance"] for record in poison_points],
+            c="red",
+            alpha=0.7
+        )
+        plt.xlabel("Gate sigmoid (mean)")
+        plt.ylabel("L2 distance between z1 and z2_proj")
+        plt.title("Gated Fusion Poison Detection (Poisoned Only)")
+        plt.grid(True, linestyle="--", alpha=0.3)
+        plt.tight_layout()
+        poison_path = base_path.with_name(f"{base_path.stem}_poison{base_path.suffix}")
+        plt.savefig(poison_path)
+        plt.close()
+        plot_paths["poison"] = poison_path
+
+    # 3D scatter plot including cosine distance
+    if clean_points or poison_points:
+        fig = plt.figure(figsize=(9, 7))
+        ax = fig.add_subplot(111, projection="3d")
+
+        if clean_points:
+            ax.scatter(
+                [record["gate_scalar"] for record in clean_points],
+                [record["l2_distance"] for record in clean_points],
+                [record["cos_distance"] for record in clean_points],
+                c="blue",
+                alpha=0.6,
+                label="Clean"
+            )
+
+        if poison_points:
+            ax.scatter(
+                [record["gate_scalar"] for record in poison_points],
+                [record["l2_distance"] for record in poison_points],
+                [record["cos_distance"] for record in poison_points],
+                c="red",
+                alpha=0.6,
+                label="Poisoned"
+            )
+
+        ax.set_xlabel("Gate sigmoid (mean)")
+        ax.set_ylabel("L2 distance")
+        ax.set_zlabel("Cosine distance")
+        ax.set_title("Gated Fusion Poison Detection (3D)")
+        if clean_points and poison_points:
+            ax.legend()
+
+        three_d_path = base_path.with_name(f"{base_path.stem}_3d{base_path.suffix}")
+        plt.tight_layout()
+        plt.savefig(three_d_path)
+        plt.close(fig)
+        plot_paths["3d"] = three_d_path
+
+    return sample_records, plot_paths
+
 
 def evaluate_model(clients, server, test_dataset, device, num_workers=0):
     """Evaluate the model on test data using the latest client model"""
@@ -365,19 +545,56 @@ if __name__ == "__main__":
     elapsed_time = end_time - start_time
     print(f"Training time: {elapsed_time:.2f}s")
 
+    # Prepare clean and poisoned datasets for poison detection while models remain in train mode
+    real_poisoning_rate = args.poisoning_rate
+    args.poisoning_rate = 1.0
+    args.delta = args.delta_s
+
+    train_dataset_size = len(train_dataset)
+    train_indices = list(range(train_dataset_size))
+    train_subset_clean = torch.utils.data.Subset(train_dataset, train_indices)
+    train_subset_poisoned, _ = create_poisoned_set(args, train_subset_clean)
+
+    _, detection_plot_paths = poison_detect(
+        clients=clients,
+        server=server,
+        gated_fusion=gated_fusion,
+        clean_subset=train_subset_clean,
+        poisoned_subset=train_subset_poisoned,
+        device=device,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        save_path=Path(args.checkpoint_dir) / "poison_detection_scatter.png"
+    )
+
+    combined_path = detection_plot_paths.get("combined")
+    if combined_path is not None:
+        print(f"Poison detection scatter (combined) saved to: {combined_path}")
+
+    clean_only_path = detection_plot_paths.get("clean")
+    if clean_only_path is not None:
+        print(f"Poison detection scatter (clean only) saved to: {clean_only_path}")
+
+    poison_only_path = detection_plot_paths.get("poison")
+    if poison_only_path is not None:
+        print(f"Poison detection scatter (poisoned only) saved to: {poison_only_path}")
+
+    three_d_path = detection_plot_paths.get("3d")
+    if three_d_path is not None:
+        print(f"Poison detection scatter (3D) saved to: {three_d_path}")
+
     # Evaluate on test set
     test_accuracy = evaluate_model(clients, server, test_dataset, device, num_workers=args.num_workers)
     print(f"\nFinal test accuracy after training: {test_accuracy:.2f}%")
+
+    exit()
 
     # Create a Subset from test_dataset with all its indices
     test_dataset_size = len(test_dataset)
     test_indices = list(range(test_dataset_size))
     test_subset = torch.utils.data.Subset(test_dataset, test_indices)
     
-    # Create a poisoned dataset with full poisoning rate
-    real_poisoning_rate = args.poisoning_rate
-    args.poisoning_rate = 1.0
-    args.delta = args.delta_s
+    # Create a poisoned dataset with full poisoning rate for ASR evaluation
     poisoned_test_subset, _ = create_poisoned_set(args, test_subset)
     
     # Evaluate the model on the poisoned test set to test ASR
@@ -386,7 +603,7 @@ if __name__ == "__main__":
     args.poisoning_rate = real_poisoning_rate
 
     # saving the results in a csv file
-    results_path = Path("./results/step_by_step_rec_same")
+    results_path = Path("./results/step_by_step_rec")
     if not results_path.exists():
         results_path.mkdir(parents=True, exist_ok=True)
     

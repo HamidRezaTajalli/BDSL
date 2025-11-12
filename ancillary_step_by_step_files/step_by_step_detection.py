@@ -16,11 +16,11 @@ import argparse
 import math
 import numpy as np
 
-from architectures import Server, Client, GatedFusion, print_model_structures, Decoder, Surrogate_Head
+from architectures import Server, Client, GatedFusion, print_model_structures
 
 from attacks.attacks import create_poisoned_set, get_wanet_grids
 
-from datasets.handler import get_datasets, get_reconstruction_datasets
+from datasets.handler import get_datasets
 
 
 def parse_args():
@@ -39,15 +39,15 @@ def parse_args():
                       help='Number of workers for data loading (default: 0)')
     parser.add_argument('--cut_layer', type=int, default=1,
                       help='Cut layer for model splitting (default: 1)')
-    parser.add_argument('--checkpoint_dir', type=str, default='./step_by_step_rec_checkpoints',
-                      help='Directory to save checkpoints (default: ./step_by_step_rec_checkpoints)')
+    parser.add_argument('--checkpoint_dir', type=str, default='./step_by_step_detection_checkpoints',
+                      help='Directory to save checkpoints (default: ./step_by_step_detection_checkpoints)')
     parser.add_argument('--poisoning_rate', type=float, default=0.1,
                       help='Poisoning rate for malicious clients (default: 0.1)')
     parser.add_argument('--target_label', type=int, default=0,
                       help='Target label for poisoning (default: 0)')
     parser.add_argument('--exp_num', type=int, default=0,
                       help='Experiment number (default: 0)')
-    parser.add_argument('--dataset', type=str, default='CIFAR10', choices=['CIFAR10', 'CIFAR100'],
+    parser.add_argument('--dataset', type=str, default='CIFAR10', choices=['CIFAR10', 'CIFAR100', 'MNIST'],
                       help='Dataset to use (default: CIFAR10)')
     parser.add_argument('--attack', type=str, default='badnet', choices=['badnet', 'wanet', 'blend', 'sig'],
                       help='Attack type to use (default: badnet)')
@@ -55,8 +55,8 @@ def parse_args():
                       help='Trigger size for badnet attack (default: 0.08)')
     parser.add_argument('--attack_mode', type=str, default='all-to-one', choices=['all-to-all', 'all-to-one'],
                       help='Attack mode for wanet attack (default: all-to-one)')
-    parser.add_argument('--backbone_freeze_rounds', type=int, default=0,
-                      help='Number of consecutive rounds to freeze backbone updates at a random starting point (default: 0)')
+    parser.add_argument('--backbone_freeze_rounds', type=int, default=10,
+                      help='Number of consecutive rounds to freeze backbone updates at a random starting point (default: 10)')
     
 
     # WaNet-specific parameters
@@ -89,12 +89,10 @@ def parse_args():
 
 # Multi-client round-robin split learning system
 class RoundRobinSplitLearningSystem:
-    def __init__(self, server, clients, gated_fusion, surrogate_head, decoder, checkpoint_dir="./checkpoints", backbone_freeze_rounds=0, num_rounds=100):
+    def __init__(self, server, clients, gated_fusion, checkpoint_dir="./checkpoints", backbone_freeze_rounds=0, num_rounds=100):
         self.server = server
         self.clients = clients
         self.gated_fusion = gated_fusion
-        self.surrogate_head = surrogate_head
-        self.decoder = decoder
         self.checkpoint_dir = checkpoint_dir
         os.makedirs(checkpoint_dir, exist_ok=True)
         self.backbone_freeze_rounds = backbone_freeze_rounds
@@ -129,9 +127,6 @@ class RoundRobinSplitLearningSystem:
         # First client initializes or loads from previous round
         self.server.load_model()  # Load server model if available
         self.gated_fusion.load_model()  # Load gated fusion model if available
-        self.surrogate_head.load_model()  # Load surrogate head model if available
-        self.decoder.load_model()  # Load decoder model if available
-
 
         for i, client in enumerate(self.clients):
             print(f"\n--- Training Client {client.client_id} ---")
@@ -148,9 +143,7 @@ class RoundRobinSplitLearningSystem:
                 client.load_models(prev_client_id)
             
             # Train client
-            rec_loss = self.surrogate_head.train_step(self.server, self.decoder, epochs=epochs_per_client)
             loss, accuracy = client.train_step(self.server, self.gated_fusion, epochs=epochs_per_client)
-            
             
             # Save client models for next client
             client.save_models()
@@ -161,16 +154,9 @@ class RoundRobinSplitLearningSystem:
             # Save gated fusion model after each client
             self.gated_fusion.save_model()
             
-            # Save surrogate head model after each client
-            self.surrogate_head.save_model()
-            
-            # Save decoder model after each client
-            self.decoder.save_model()
-            
             end_time = time.time()
             print(f"Client {client.client_id} completed training in {end_time - start_time:.2f}s")
             print(f"Final Loss: {loss:.4f}, Accuracy: {accuracy:.2f}%")
-            print(f"Final Reconstruction Loss: {rec_loss:.4f}")
         
         print("\n--- Round completed ---")
     
@@ -210,6 +196,7 @@ def poison_detect(clients, server, gated_fusion, clean_subset, poisoned_subset, 
     head = last_client.head
     backbone = server.backbone
 
+    # Ensure modules stay in training mode as requested
     head.train()
     backbone.train()
     gated_fusion.train()
@@ -377,7 +364,6 @@ def poison_detect(clients, server, gated_fusion, clean_subset, poisoned_subset, 
 
     return sample_records, plot_paths
 
-
 def evaluate_model(clients, server, test_dataset, device, num_workers=0):
     """Evaluate the model on test data using the latest client model"""
     test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False, num_workers=num_workers)
@@ -468,23 +454,6 @@ if __name__ == "__main__":
 
     # Create gated fusion
     gated_fusion = GatedFusion(model_name=args.model, cut_layer=args.cut_layer, checkpoint_dir=args.checkpoint_dir).to(device)
-
-    # Create reconstruction dataset (must be created before decoder to get normalization params)
-    reconstruction_dataset, rec_num_classes = get_reconstruction_datasets(args.dataset.lower(), same_dataset=True, size_fraction=0.1)
-
-    # Create decoder module with normalization parameters from reconstruction dataset
-    decoder = Decoder(
-        args=args,
-        model_name=args.model, 
-        cut_layer=args.cut_layer, 
-        device=device, 
-        checkpoint_dir=args.checkpoint_dir,
-        normalization_mean=reconstruction_dataset.mean,
-        normalization_std=reconstruction_dataset.std
-    )
-
-    # Create surrogate head module
-    surrogate_head = Surrogate_Head(args=args, model_name=args.model, dataset=reconstruction_dataset, batch_size=args.batch_size, num_classes=num_classes, device=device, checkpoint_dir=args.checkpoint_dir, cut_layer=args.cut_layer)
     
     # Create multiple clients with different data partitions
     clients = []
@@ -529,8 +498,6 @@ if __name__ == "__main__":
         server,
         clients,
         gated_fusion,
-        surrogate_head,
-        decoder,
         checkpoint_dir=args.checkpoint_dir,
         backbone_freeze_rounds=args.backbone_freeze_rounds,
         num_rounds=args.num_rounds
@@ -545,11 +512,19 @@ if __name__ == "__main__":
     elapsed_time = end_time - start_time
     print(f"Training time: {elapsed_time:.2f}s")
 
-    # Prepare clean and poisoned datasets for poison detection while models remain in train mode
+    # Create a Subset from test_dataset with all its indices
+    test_dataset_size = len(test_dataset)
+    test_indices = list(range(test_dataset_size))
+    test_subset = torch.utils.data.Subset(test_dataset, test_indices)
+    
+    # Create a poisoned dataset with full poisoning rate
     real_poisoning_rate = args.poisoning_rate
     args.poisoning_rate = 1.0
     args.delta = args.delta_s
+    poisoned_test_subset, _ = create_poisoned_set(args, test_subset)
 
+
+    # create a subset from train_dataset with all its indices
     train_dataset_size = len(train_dataset)
     train_indices = list(range(train_dataset_size))
     train_subset_clean = torch.utils.data.Subset(train_dataset, train_indices)
@@ -583,19 +558,11 @@ if __name__ == "__main__":
     if three_d_path is not None:
         print(f"Poison detection scatter (3D) saved to: {three_d_path}")
 
+    exit()
+
     # Evaluate on test set
     test_accuracy = evaluate_model(clients, server, test_dataset, device, num_workers=args.num_workers)
     print(f"\nFinal test accuracy after training: {test_accuracy:.2f}%")
-
-    exit()
-
-    # Create a Subset from test_dataset with all its indices
-    test_dataset_size = len(test_dataset)
-    test_indices = list(range(test_dataset_size))
-    test_subset = torch.utils.data.Subset(test_dataset, test_indices)
-    
-    # Create a poisoned dataset with full poisoning rate for ASR evaluation
-    poisoned_test_subset, _ = create_poisoned_set(args, test_subset)
     
     # Evaluate the model on the poisoned test set to test ASR
     asr_accuracy = evaluate_model(clients, server, poisoned_test_subset, device, num_workers=args.num_workers)
@@ -603,7 +570,7 @@ if __name__ == "__main__":
     args.poisoning_rate = real_poisoning_rate
 
     # saving the results in a csv file
-    results_path = Path("./results/step_by_step_rec")
+    results_path = Path("./results")
     if not results_path.exists():
         results_path.mkdir(parents=True, exist_ok=True)
     

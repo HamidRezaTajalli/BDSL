@@ -19,11 +19,15 @@ class PoisonedDataset(Dataset):
                 'mean': [0.485, 0.456, 0.406],
                 'std': [0.229, 0.224, 0.225]
             },
+            'cifar100': {
+                'mean': [0.485, 0.456, 0.406],
+                'std': [0.229, 0.224, 0.225]
+            },
+            'mnist': {
+                'mean': [0.1307, 0.1307, 0.1307],
+                'std': [0.3081, 0.3081, 0.3081]
+            },
             # Add more datasets here, e.g.:
-            # 'mnist': {
-            #     'mean': [0.1307],
-            #     'std': [0.3081]
-            # },
             # 'imagenet': {
             #     'mean': [0.485, 0.456, 0.406],
             #     'std': [0.229, 0.224, 0.225]
@@ -122,3 +126,5 @@ def create_blend_poisoned_set(args, subset):
         target_label=args.target_label
     )
     return poisoned_dataset, poisoned_indices
+
+

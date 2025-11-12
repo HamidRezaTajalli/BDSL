@@ -9,17 +9,22 @@ import time
 
 from attacks.wanet import determine_input_dimensions, generate_wanet_grids, create_wanet_poisoned_testset, create_wanet_poisoned_trainset
 from attacks.attacks import create_poisoned_set
+# from models.VGG19_new import VGG19Head, VGG19Tail, VGG19Backbone
+from models.VGG19 import VGG19Head, VGG19Tail, VGG19Backbone
+from models.ResNet18 import ResNet18Head, ResNet18Tail, ResNet18Backbone
 
 
-def train_resnet18():
+def train_vgg19():
     # Device configuration
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
     # Hyperparameters
     batch_size = 128
-    learning_rate = 0.001
-    num_epochs = 20
+    learning_rate = 0.01  # Higher learning rate for SGD
+    momentum = 0.9  # Standard momentum for VGG
+    weight_decay = 5e-4  # Weight decay for regularization
+    num_epochs = 30  # More epochs for SGD convergence
     
     # Load CIFAR-10 dataset
     print("Loading CIFAR-10 dataset...")
@@ -46,17 +51,14 @@ def train_resnet18():
         attack_mode="all-to-one",
         target_label=0,
         blend_alpha=0.2,
-        delta_s=60,
-        delta_t=30,
-        f=6,
-        attack="sig",
+        attack="wanet",
         dataset="cifar10",
-        num_workers=12
+        num_workers=6,
+        model_name="vgg19"
     )
 
     args.noise_grid, args.identity_grid = generate_wanet_grids(args.k, args.input_height)
-    args.poisoning_rate = 0.4
-    args.delta = args.delta_t
+    args.poisoning_rate = 0.0
 
     print("input_height: ", input_height)
     print("input_width: ", input_width)
@@ -93,27 +95,48 @@ def train_resnet18():
     
     print(f"Train samples: {len(train_dataset)}, Test samples: {len(test_dataset)}")
     
-    # Load ResNet18 from PyTorch
-    model = models.resnet18(pretrained=True)
+    # Load VGG19 from PyTorch
+    # model = models.vgg19(weights='DEFAULT')
+    if args.model_name == "vgg19":
+        head = VGG19Head(in_channels=3, cut_layer=1)
+        backbone = VGG19Backbone(cut_layer=1)
+        tail = VGG19Tail(num_classes=num_classes)
+    elif args.model_name == "resnet18":
+        head = ResNet18Head(in_channels=3, cut_layer=1)
+        backbone = ResNet18Backbone(cut_layer=1)
+        tail = ResNet18Tail(num_classes=num_classes)
+
+    else:
+        raise Exception(f"Model {args.model_name} not supported")
     
     # Modify the final layer for CIFAR-10 (10 classes)
-    model.fc = nn.Linear(model.fc.in_features, num_classes)
+    # model.classifier[6] = nn.Linear(model.classifier[6].in_features, num_classes)
     
     # Move model to device
-    model = model.to(device)
+    head = head.to(device)
+    backbone = backbone.to(device)
+    tail = tail.to(device)
     
     # Loss function and optimizer
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    head_optimizer = optim.SGD(head.parameters(), lr=learning_rate, momentum=momentum, weight_decay=weight_decay)
+    backbone_optimizer = optim.SGD(backbone.parameters(), lr=learning_rate, momentum=momentum, weight_decay=weight_decay)
+    tail_optimizer = optim.SGD(tail.parameters(), lr=learning_rate, momentum=momentum, weight_decay=weight_decay)
     
-    # Learning rate scheduler
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.1)
+    # Learning rate scheduler (more aggressive for VGG19)
+    head_scheduler = optim.lr_scheduler.MultiStepLR(head_optimizer, milestones=[15, 25], gamma=0.1)
+    backbone_scheduler = optim.lr_scheduler.MultiStepLR(backbone_optimizer, milestones=[15, 25], gamma=0.1)
+    tail_scheduler = optim.lr_scheduler.MultiStepLR(tail_optimizer, milestones=[15, 25], gamma=0.1)
     
+    print(f"Optimizer: SGD with lr={learning_rate}, momentum={momentum}, weight_decay={weight_decay}")
+    print(f"Learning rate schedule: MultiStepLR with milestones at epochs [15, 25], gamma=0.1")
     print(f"Starting training for {num_epochs} epochs...")
     
     # Training loop
     for epoch in range(num_epochs):
-        model.train()
+        head.train()
+        backbone.train()
+        tail.train()
         running_loss = 0.0
         correct = 0
         total = 0
@@ -123,19 +146,32 @@ def train_resnet18():
             data, target = data.to(device), target.to(device)
             
             # Zero the parameter gradients
-            optimizer.zero_grad()
+            head_optimizer.zero_grad()
+            backbone_optimizer.zero_grad()
+            tail_optimizer.zero_grad()
             
             # Forward pass
-            outputs = model(data)
-            loss = criterion(outputs, target)
+            head_output = head(data)
+            backbone_input = head_output.detach().clone().requires_grad_(True)
+            backbone_output = backbone(backbone_input)
+            tail_input = backbone_output.detach().clone().requires_grad_(True)
+            tail_output = tail(tail_input)
+
+            loss = criterion(tail_output, target)
             
             # Backward pass and optimize
             loss.backward()
-            optimizer.step()
+            tail_optimizer.step()
+
+            backbone_output.backward(tail_input.grad)
+            backbone_optimizer.step()
+
+            head_output.backward(backbone_input.grad)
+            head_optimizer.step()
             
             # Statistics
             running_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
+            _, predicted = torch.max(tail_output.data, 1)
             total += target.size(0)
             correct += (predicted == target).sum().item()
             
@@ -154,8 +190,11 @@ def train_resnet18():
               f'Time: {epoch_time:.2f}s')
         
         # Update learning rate
-        scheduler.step()
-        
+        head_scheduler.step()
+        backbone_scheduler.step()
+        tail_scheduler.step()
+
+        model = nn.Sequential(head, backbone, tail)
         # Evaluate on test set every 10 epochs
         if (epoch + 1) % 10 == 0:
             test_accuracy = evaluate_model(args, model, test_loader, device)
@@ -168,7 +207,6 @@ def train_resnet18():
 
     # create poisoned test set
     args.poisoning_rate = 1.0
-    args.delta = args.delta_s
     poisoned_test_dataset, test_poisoned_indices = create_poisoned_set(args, test_dataset)
     # poisoned_test_dataset, test_poisoned_indices = create_wanet_poisoned_testset(args, test_dataset)
     poisoned_test_loader = DataLoader(poisoned_test_dataset, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
@@ -179,8 +217,8 @@ def train_resnet18():
     print(f'Poisoned Test Accuracy: {poisoned_test_accuracy:.2f}%')
     
     # # Save the trained model
-    # torch.save(model.state_dict(), 'resnet18_cifar10.pth')
-    # print("Model saved as 'resnet18_cifar10.pth'")
+    # torch.save(model.state_dict(), 'vgg19_cifar10.pth')
+    # print("Model saved as 'vgg19_cifar10.pth'")
     
     return model
 
@@ -205,5 +243,5 @@ def evaluate_model(args, model, test_loader, device, poisoned=False):
 
 
 if __name__ == "__main__":
-    # Train the ResNet18 model
-    trained_model = train_resnet18()
+    # Train the VGG19 model
+    trained_model = train_vgg19()

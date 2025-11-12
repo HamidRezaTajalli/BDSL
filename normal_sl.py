@@ -42,7 +42,7 @@ def parse_args():
                       help='Directory to save checkpoints (default: ./split_learning_checkpoints)')
     parser.add_argument('--exp_num', type=int, default=0,
                       help='Experiment number (default: 0)')
-    parser.add_argument('--dataset', type=str, default='CIFAR10', choices=['CIFAR10', 'CIFAR100'],
+    parser.add_argument('--dataset', type=str, default='CIFAR10', choices=['CIFAR10', 'CIFAR100', 'MNIST'],
                       help='Dataset to use (default: CIFAR10)')
     return parser.parse_args()
 

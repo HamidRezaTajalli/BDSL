@@ -1,5 +1,6 @@
 from .cifar10 import get_cifar10_datasets
 from .cifar100 import get_cifar100_datasets
+from .mnist import get_mnist_datasets
 import torch
 import numpy as np
 from torch.utils.data import Subset
@@ -9,6 +10,8 @@ def get_datasets(dataset_name):
         return get_cifar10_datasets()
     elif dataset_name.lower() == 'cifar100':
         return get_cifar100_datasets()
+    elif dataset_name.lower() == 'mnist':
+        return get_mnist_datasets()
     else:
         raise ValueError(f"Dataset {dataset_name} not found")
 
@@ -21,6 +24,9 @@ def get_reconstruction_datasets(dataset_name, same_dataset=True, size_fraction=0
         
         # Calculate the number of samples to use
         num_samples = int(len(cifar10_train) * size_fraction)
+
+        if num_samples <= 0:
+            raise ValueError("size_fraction too small; no samples selected for reconstruction dataset")
         
         if same_dataset:
             # Sample from CIFAR10 training dataset
@@ -40,6 +46,21 @@ def get_reconstruction_datasets(dataset_name, same_dataset=True, size_fraction=0
             reconstruction_dataset.mean = [0.485, 0.456, 0.406]
             reconstruction_dataset.std = [0.229, 0.224, 0.225]
         
+        return reconstruction_dataset, num_classes
+    elif dataset_name.lower() == 'mnist':
+        mnist_train, _, num_classes = get_mnist_datasets()
+
+        num_samples = int(len(mnist_train) * size_fraction)
+
+        if num_samples <= 0:
+            raise ValueError("size_fraction too small; no samples selected for reconstruction dataset")
+
+        indices = np.random.choice(len(mnist_train), num_samples, replace=False)
+        reconstruction_dataset = Subset(mnist_train, indices)
+
+        reconstruction_dataset.mean = [0.1307, 0.1307, 0.1307]
+        reconstruction_dataset.std = [0.3081, 0.3081, 0.3081]
+
         return reconstruction_dataset, num_classes
     else:
         raise ValueError(f"Dataset {dataset_name} not found")
