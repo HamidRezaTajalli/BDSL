@@ -12,9 +12,9 @@ template_file_address = Path("./job_executer.sh")
 # Parameter lists based on utils.py arguments
 model_list = ["resnet18", "resnet50", "vgg19", "densenet121", "vit_b16"]
 model_list = ["resnet18"]
-dataset_list = ["CIFAR10"]
+dataset_list = ["GTSRB"]
 num_clients_list = [10]
-num_rounds_list = [60]
+num_rounds_list = [55]
 epochs_per_client_list = [1]
 batch_size_list = [128]
 cut_layer_list = [1]

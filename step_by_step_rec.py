@@ -47,7 +47,7 @@ def parse_args():
                       help='Target label for poisoning (default: 0)')
     parser.add_argument('--exp_num', type=int, default=0,
                       help='Experiment number (default: 0)')
-    parser.add_argument('--dataset', type=str, default='CIFAR10', choices=['CIFAR10', 'CIFAR100', 'MNIST'],
+    parser.add_argument('--dataset', type=str, default='CIFAR10', choices=['CIFAR10', 'CIFAR100', 'MNIST', 'GTSRB'],
                       help='Dataset to use (default: CIFAR10)')
     parser.add_argument('--attack', type=str, default='badnet', choices=['badnet', 'wanet', 'blend', 'sig'],
                       help='Attack type to use (default: badnet)')
